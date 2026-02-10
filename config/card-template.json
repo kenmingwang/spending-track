@@ -1,0 +1,121 @@
+{
+  "cardId": "DBS_WWMC",
+  "cardName": "DBS Women's World Card",
+  "issuer": "DBS",
+  "cardType": "Credit",
+  "currency": "SGD",
+  
+  "rewardProgram": {
+    "type": "Miles",
+    "program": "DBS Points (convertible to miles)",
+    "conversionRate": "1 DBS Point = 2 Miles"
+  },
+
+  "spendingCaps": {
+    "type": "shared",
+    "totalCapPerMonth": 2000,
+    "description": "Total combined spending cap across all eligible categories"
+  },
+
+  "benefitCategories": [
+    {
+      "categoryName": "Online Shopping",
+      "milesPerDollar": 4,
+      "basePointsPerDollar": 2,
+      "matchingRules": {
+        "merchantKeywords": [
+          "SHOPEE", "LAZADA", "AMAZON", "TAOBAO", "QOO10",
+          "ZALORA", "SHOPBACK", "GRAB", "FOODPANDA"
+        ],
+        "categoryKeywords": [
+          "ONLINE SHOPPING", "E-COMMERCE", "ONLINE RETAIL"
+        ],
+        "paymentTypeKeywords": [
+          "ONLINE", "IN-APP", "E-COMMERCE"
+        ],
+        "transactionTypeKeywords": [
+          "PURCHASE", "ONLINE PAYMENT"
+        ]
+      }
+    },
+    {
+      "categoryName": "Travel Booking",
+      "milesPerDollar": 4,
+      "basePointsPerDollar": 2,
+      "matchingRules": {
+        "merchantKeywords": [
+          "AGODA", "BOOKING", "EXPEDIA", "AIRBNB", "KLOOK",
+          "TRIP.COM", "TRAVELOKA", "HOTELS.COM"
+        ],
+        "categoryKeywords": [
+          "TRAVEL", "ACCOMMODATION", "BOOKING"
+        ],
+        "paymentTypeKeywords": [
+          "ONLINE"
+        ],
+        "transactionTypeKeywords": [
+          "PURCHASE"
+        ]
+      }
+    },
+    {
+      "categoryName": "Transportation (Online)",
+      "milesPerDollar": 4,
+      "basePointsPerDollar": 2,
+      "matchingRules": {
+        "merchantKeywords": [
+          "GRAB", "GOJEK", "TADA", "RYDE", "CDG ZIGZAG"
+        ],
+        "categoryKeywords": [
+          "TRANSPORTATION", "RIDE HAILING", "TAXI"
+        ],
+        "paymentTypeKeywords": [
+          "ONLINE", "IN-APP"
+        ],
+        "transactionTypeKeywords": [
+          "PURCHASE"
+        ]
+      }
+    },
+    {
+      "categoryName": "Food Delivery",
+      "milesPerDollar": 4,
+      "basePointsPerDollar": 2,
+      "matchingRules": {
+        "merchantKeywords": [
+          "DELIVEROO", "FOODPANDA", "GRABFOOD"
+        ],
+        "categoryKeywords": [
+          "FOOD DELIVERY", "DINING"
+        ],
+        "paymentTypeKeywords": [
+          "ONLINE", "IN-APP"
+        ],
+        "transactionTypeKeywords": [
+          "PURCHASE"
+        ]
+      }
+    }
+  ],
+
+  "fallbackReward": {
+    "milesPerDollar": 0.4,
+    "basePointsPerDollar": 0.2,
+    "description": "For all other spending not in eligible categories"
+  },
+
+  "exclusions": [
+    "Cash advances", "Balance transfers", "Fund transfers",
+    "Bill payments", "Credit card payments", "Annual fees"
+  ],
+
+  "additionalNotes": [
+    "4 mpd applies to online transactions only (in-app or online payments)",
+    "Total cap of SGD 2,000 per calendar month across all eligible categories",
+    "Minimum spend requirement: None",
+    "Points expiry: No expiry"
+  ],
+
+  "lastUpdated": "2026-02-02",
+  "source": "DBS Official Website / Card T&C"
+}

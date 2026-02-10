@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "Spending Track",
+  "version": "1.0",
+  "description": "Track spending and calculate credit card benefits",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage"
+  ],
+  "action": {
+    "default_popup": "popup/index.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://internet-banking.dbs.com.sg/*", "*://*/*"],
+      "js": ["src/content-scripts/extractor.ts"]
+    }
+  ]
+}

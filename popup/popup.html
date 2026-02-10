@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <title>Spending Track</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+
+<body>
+  <div class="container">
+    <h1>Spending Track</h1>
+    <div class="card-info">
+      <h2>DBS Women's World Card</h2>
+      <p>Cap: $2,000.00 SGD</p>
+      <p class="summary-line">
+        Total Spent (<select id="monthSelect"></select>):
+        <span id="spentAmount">$0.00</span>
+      </p>
+      <p class="summary-line">Remaining: <span id="remainingAmount">$2,000.00</span></p>
+
+      <div class="category-breakdown">
+        <h3>Breakdown</h3>
+        <div id="breakdownList">
+          <!-- Dynamic Content -->
+        </div>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button id="scanBtn" class="primary-btn">Scan Transactions</button>
+      <button id="stopBtn" class="secondary-btn hidden" style="background-color: #e74c3c; color: white;">Stop
+        Scan</button>
+      <button id="dashboardBtn" class="secondary-btn" style="background-color: #f39c12;">Dashboard</button>
+    </div>
+
+    <div id="progressContainer" class="progress-container hidden">
+      <div class="progress-text"><span id="progressText">Scanning: 0/0</span></div>
+      <div class="progress-bar">
+        <div id="progressFill" class="progress-fill"></div>
+      </div>
+    </div>
+    <div class="actions" style="margin-top:5px">
+      <button id="resetBtn" class="secondary-btn">Reset Storage</button>
+    </div>
+    <div id="status"></div>
+  </div>
+  <script src="../utils/calculator.js"></script>
+  <script src="popup.js"></script>
+</body>
+
+</html>
