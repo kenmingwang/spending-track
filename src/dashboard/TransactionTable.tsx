@@ -11,6 +11,7 @@ import {
 import { Transaction } from '../types';
 import { CardBenefitManager } from '../utils/card-benefits';
 import { normalizeCategory } from '../utils/category-overrides';
+import { Language, t } from '../utils/i18n';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -24,6 +25,7 @@ interface Props {
   userElections?: string[];
   onCategoryChange?: (txn: Transaction, newCategory: string) => void;
   onReimbursableChange?: (txn: Transaction, reimbursable: boolean) => void;
+  language?: Language;
 }
 
 const columnHelper = createColumnHelper<Transaction>();
@@ -93,13 +95,14 @@ const CategoryCell: React.FC<{
   );
 };
 
-export const TransactionTable: React.FC<Props> = ({ transactions, cardId, userElections, onCategoryChange, onReimbursableChange }) => {
+export const TransactionTable: React.FC<Props> = ({ transactions, cardId, userElections, onCategoryChange, onReimbursableChange, language = 'en' }) => {
   const [sorting, setSorting] = React.useState<SortingState>([{ id: 'date', desc: true }]);
   const [globalFilter, setGlobalFilter] = React.useState('');
+  const locale = language === 'zh' ? 'zh-CN' : 'en-SG';
 
   const cardConfig = CardBenefitManager.getCardConfig(cardId);
   const baseMpd = cardConfig?.fallbackMPD ?? 0.4;
-  const pointsHeader = cardId === 'UOB_LADYS' ? 'UOB Points' : cardId === 'DBS_WWMC' ? 'DBS Points' : 'Points';
+  const pointsHeader = cardId === 'UOB_LADYS' ? `UOB ${t(language, 'points')}` : cardId === 'DBS_WWMC' ? `DBS ${t(language, 'points')}` : t(language, 'points');
 
   const categorySuggestions = useMemo(() => {
     const set = new Set<string>();
@@ -124,20 +127,20 @@ export const TransactionTable: React.FC<Props> = ({ transactions, cardId, userEl
 
   const columns = useMemo(() => [
     columnHelper.accessor('date', {
-      header: 'Date',
+      header: t(language, 'date'),
       sortingFn: (rowA, rowB, columnId) =>
         getDateSortValue(rowA.getValue(columnId) as string) - getDateSortValue(rowB.getValue(columnId) as string),
       sortDescFirst: true,
-      cell: info => new Date(info.getValue()).toLocaleDateString('en-SG', { 
+      cell: info => new Date(info.getValue()).toLocaleDateString(locale, {
         day: '2-digit', month: 'short', year: 'numeric' 
       }),
     }),
     columnHelper.accessor('merchant', {
-      header: 'Merchant',
+      header: t(language, 'merchant'),
       cell: info => <span className="font-medium text-gray-900">{info.getValue()}</span>,
     }),
     columnHelper.accessor('category', {
-      header: 'Category',
+      header: t(language, 'category'),
       cell: info => (
         <CategoryCell
           value={normalizeCategory(info.getValue() || 'Uncategorized')}
@@ -147,12 +150,12 @@ export const TransactionTable: React.FC<Props> = ({ transactions, cardId, userEl
       ),
     }),
     columnHelper.accessor('amount', {
-      header: 'Amount',
+      header: t(language, 'amount'),
       cell: info => <span className="font-semibold text-gray-900">${Math.abs(info.getValue()).toFixed(2)}</span>,
     }),
     columnHelper.display({
       id: 'reimbursable',
-      header: 'Reimb.',
+      header: t(language, 'reimb_short'),
       cell: info => {
         const txn = info.row.original;
         return (
@@ -163,23 +166,23 @@ export const TransactionTable: React.FC<Props> = ({ transactions, cardId, userEl
               onChange={(e) => onReimbursableChange?.(txn, e.target.checked)}
               className="h-3.5 w-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
             />
-            Yes
+            {t(language, 'yes')}
           </label>
         );
       }
     }),
     columnHelper.accessor('paymentType', {
-      header: 'Type',
+      header: t(language, 'type'),
       cell: info => {
         const val = info.getValue()?.toUpperCase() || '';
-        if (val.includes('ONLINE') || val.includes('IN-APP')) return <span className="text-blue-600 text-xs font-medium">Online/In-app</span>;
-        if (val.includes('PHYSICAL') || val.includes('CONTACTLESS')) return <span className="text-orange-600 text-xs font-medium">Offline/Contactless</span>;
-        return <span className="text-gray-400 text-xs italic">N/A</span>;
+        if (val.includes('ONLINE') || val.includes('IN-APP')) return <span className="text-blue-600 text-xs font-medium">{t(language, 'online_inapp')}</span>;
+        if (val.includes('PHYSICAL') || val.includes('CONTACTLESS')) return <span className="text-orange-600 text-xs font-medium">{t(language, 'offline_contactless')}</span>;
+        return <span className="text-gray-400 text-xs italic">{t(language, 'na')}</span>;
       },
     }),
     columnHelper.display({
       id: 'benefit',
-      header: 'Benefit',
+      header: t(language, 'benefit'),
       cell: props => {
         const txn = props.row.original;
         const eligibility = CardBenefitManager.isTransactionEligible(txn, cardId, userElections);
@@ -208,7 +211,7 @@ export const TransactionTable: React.FC<Props> = ({ transactions, cardId, userEl
     }),
     columnHelper.display({
       id: 'miles',
-      header: 'Miles',
+      header: t(language, 'miles'),
       cell: props => {
         const points = getPoints(props.row.original);
         return (
@@ -218,7 +221,7 @@ export const TransactionTable: React.FC<Props> = ({ transactions, cardId, userEl
         );
       }
     }),
-  ], [cardId, userElections, onCategoryChange, onReimbursableChange, baseMpd, categorySuggestions, pointsHeader]);
+  ], [cardId, userElections, onCategoryChange, onReimbursableChange, baseMpd, categorySuggestions, pointsHeader, language, locale]);
 
   const table = useReactTable({
     data: transactions,
@@ -241,7 +244,7 @@ export const TransactionTable: React.FC<Props> = ({ transactions, cardId, userEl
           value={globalFilter ?? ''}
           onChange={e => setGlobalFilter(e.target.value)}
           className="w-full max-w-sm px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition-all text-sm"
-          placeholder="Search transactions..."
+          placeholder={t(language, 'search_transactions')}
         />
       </div>
       <div className="overflow-x-auto">
@@ -280,20 +283,20 @@ export const TransactionTable: React.FC<Props> = ({ transactions, cardId, userEl
           </tbody>
           <tfoot className="bg-gray-50/30 font-semibold border-t-2 border-gray-100">
             <tr>
-              <td className="px-6 py-4" colSpan={3}>Summary Totals</td>
+              <td className="px-6 py-4" colSpan={3}>{t(language, 'summary_totals')}</td>
               <td className="px-6 py-4 text-gray-900">
                 ${transactions.reduce((acc, t) => acc + Math.abs(t.amount), 0).toFixed(2)}
               </td>
               <td></td>
               <td className="px-6 py-4 text-gray-900">
-                ${transactions.reduce((acc, t) => acc + (t.reimbursable ? 0 : Math.abs(t.amount)), 0).toFixed(2)} net
+                ${transactions.reduce((acc, t) => acc + (t.reimbursable ? 0 : Math.abs(t.amount)), 0).toFixed(2)} {t(language, 'net')}
               </td>
               <td className="px-6 py-4 text-blue-600"></td>
               <td className="px-6 py-4 text-blue-700">
-                {transactions.reduce((acc, t) => acc + getPoints(t).totalPoints, 0).toLocaleString()} points
+                {transactions.reduce((acc, t) => acc + getPoints(t).totalPoints, 0).toLocaleString()} {t(language, 'points_label')}
               </td>
               <td className="px-6 py-4 text-blue-700">
-                {transactions.reduce((acc, t) => acc + getPoints(t).miles, 0).toLocaleString()} miles
+                {transactions.reduce((acc, t) => acc + getPoints(t).miles, 0).toLocaleString()} {t(language, 'miles_label')}
               </td>
             </tr>
           </tfoot>

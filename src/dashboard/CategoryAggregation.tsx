@@ -1,6 +1,7 @@
 import React from 'react';
 import { Transaction } from '../types';
 import { normalizeCategory, normalizeMerchant } from '../utils/category-overrides';
+import { Language, t } from '../utils/i18n';
 
 interface Props {
   transactions: Transaction[];
@@ -8,6 +9,7 @@ interface Props {
   compareMode?: 'mom' | 'yoy' | null;
   currentMonthKey?: string;
   currentYear?: string;
+  language?: Language;
 }
 
 export const CategoryAggregation: React.FC<Props> = ({
@@ -16,10 +18,18 @@ export const CategoryAggregation: React.FC<Props> = ({
   compareMode = null,
   currentMonthKey,
   currentYear,
+  language = 'en',
 }) => {
   const [selectedCategory, setSelectedCategory] = React.useState<string | null>(null);
   const [largestExpanded, setLargestExpanded] = React.useState(false);
   const [frequentExpanded, setFrequentExpanded] = React.useState(false);
+
+  const localizeCategory = React.useCallback((category: string) => {
+    const cat = normalizeCategory(category || 'Uncategorized');
+    if (cat === 'Dining') return t(language, 'dining');
+    if (cat === 'Travel') return t(language, 'travel');
+    return cat;
+  }, [language]);
 
   const getCategoryEmoji = React.useCallback((category: string) => {
     const cat = (category || '').toUpperCase();
@@ -171,36 +181,36 @@ export const CategoryAggregation: React.FC<Props> = ({
     <div className="space-y-6">
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
-          <div className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">Total Spend</div>
+          <div className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">{t(language, 'total_spend')}</div>
           <div className="text-2xl font-bold text-gray-900">${stats.totalSpent.toFixed(2)}</div>
         </div>
         <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
-          <div className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">Transactions</div>
+          <div className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">{t(language, 'transactions_count')}</div>
           <div className="text-2xl font-bold text-gray-900">{stats.txCount.toLocaleString()}</div>
         </div>
         <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
-          <div className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">Avg Ticket</div>
+          <div className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">{t(language, 'avg_ticket')}</div>
           <div className="text-2xl font-bold text-gray-900">${stats.avgSpend.toFixed(2)}</div>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100 lg:col-span-1">
-          <div className="text-sm font-semibold text-gray-700 mb-4">Category Share</div>
+          <div className="text-sm font-semibold text-gray-700 mb-4">{t(language, 'category_share')}</div>
           <div className="flex items-center gap-5">
             <div
               className="w-40 h-40 rounded-full border border-gray-100 shrink-0"
               style={{ background: stats.pieGradient }}
             />
             <div className="space-y-2 text-xs w-full">
-            {stats.pieCategories.map(([cat, data], idx) => {
+              {stats.pieCategories.map(([cat, data], idx) => {
                 const colors = ['#2563eb', '#14b8a6', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4'];
                 const pct = stats.totalSpent > 0 ? (data.amount / stats.totalSpent) * 100 : 0;
                 return (
                   <div key={cat} className="flex items-center justify-between gap-3">
                     <span className="flex items-center gap-2 text-gray-700 truncate">
                       <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ backgroundColor: colors[idx % colors.length] }} />
-                      <span className="truncate">{getCategoryEmoji(cat)} {cat}</span>
+                      <span className="truncate">{getCategoryEmoji(cat)} {localizeCategory(cat)}</span>
                     </span>
                     <span className="text-gray-500 font-medium">{pct.toFixed(1)}%</span>
                   </div>
@@ -211,12 +221,12 @@ export const CategoryAggregation: React.FC<Props> = ({
         </div>
 
         <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100 lg:col-span-1">
-          <div className="text-sm font-semibold text-gray-700 mb-3">Top 5 Largest Transactions</div>
+          <div className="text-sm font-semibold text-gray-700 mb-3">{t(language, 'top_largest')}</div>
           <div className={`space-y-2 ${largestExpanded ? 'max-h-64 overflow-auto pr-1' : ''}`}>
-            {displayedLargest.map((t, idx) => (
-              <div key={`${t.merchant}-${t.date}-${idx}`} className="flex justify-between gap-3 text-sm">
-                <span className="text-gray-700 truncate">{idx + 1}. {t.merchant}</span>
-                <span className="font-bold text-gray-900">${t.amountAbs.toFixed(2)}</span>
+            {displayedLargest.map((txn, idx) => (
+              <div key={`${txn.merchant}-${txn.date}-${idx}`} className="flex justify-between gap-3 text-sm">
+                <span className="text-gray-700 truncate">{idx + 1}. {txn.merchant}</span>
+                <span className="font-bold text-gray-900">${txn.amountAbs.toFixed(2)}</span>
               </div>
             ))}
           </div>
@@ -225,13 +235,13 @@ export const CategoryAggregation: React.FC<Props> = ({
               onClick={() => setLargestExpanded(v => !v)}
               className="mt-3 text-xs font-semibold text-blue-600 hover:text-blue-700"
             >
-              {largestExpanded ? 'Show Less' : `Expand (${stats.largestTransactions.length})`}
+              {largestExpanded ? t(language, 'show_less') : t(language, 'expand', { count: stats.largestTransactions.length })}
             </button>
           )}
         </div>
 
         <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100 lg:col-span-1">
-          <div className="text-sm font-semibold text-gray-700 mb-3">Most Frequent Merchants</div>
+          <div className="text-sm font-semibold text-gray-700 mb-3">{t(language, 'most_frequent_merchants')}</div>
           <div className={`space-y-2 ${frequentExpanded ? 'max-h-64 overflow-auto pr-1' : ''}`}>
             {displayedFrequent.map(([merchantKey, data], idx) => (
               <div key={`${merchantKey}-${idx}`} className="flex justify-between gap-3 text-sm">
@@ -245,7 +255,7 @@ export const CategoryAggregation: React.FC<Props> = ({
               onClick={() => setFrequentExpanded(v => !v)}
               className="mt-3 text-xs font-semibold text-blue-600 hover:text-blue-700"
             >
-              {frequentExpanded ? 'Show Less' : `Expand (${stats.topFrequent.length})`}
+              {frequentExpanded ? t(language, 'show_less') : t(language, 'expand', { count: stats.topFrequent.length })}
             </button>
           )}
         </div>
@@ -258,63 +268,64 @@ export const CategoryAggregation: React.FC<Props> = ({
           const previousAmount = previousPeriodCategoryTotals[cat] || 0;
           const delta = data.amount - previousAmount;
           const deltaPct = previousAmount > 0 ? (delta / previousAmount) * 100 : null;
-          const compareText = compareMode === 'mom' ? 'MoM' : compareMode === 'yoy' ? 'YoY' : '';
+          const compareText = compareMode === 'mom' ? t(language, 'mom') : compareMode === 'yoy' ? t(language, 'yoy') : '';
           return (
-          <button
-            key={cat}
-            onClick={() => setSelectedCategory(active ? null : cat)}
-            className={`bg-white p-4 rounded-xl shadow-sm border border-gray-100 border-l-4 ${color.border} text-left transition-all hover:shadow-md hover:-translate-y-0.5 ${active ? 'ring-2 ring-blue-300' : ''}`}
-          >
-            <div className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1 truncate" title={cat}>
-              {getCategoryEmoji(cat)} {cat}
-            </div>
-            <div className="text-lg font-bold text-gray-900">${data.amount.toFixed(2)}</div>
-            <div className="mt-2 flex items-center justify-between">
-              <span className="text-xs text-gray-500 font-medium">{data.count} txns</span>
-              <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${color.chip}`}>
-                {stats.totalSpent > 0 ? ((data.amount / stats.totalSpent) * 100).toFixed(1) : '0.0'}%
-              </span>
-            </div>
-            {compareMode && (
-              <div className="mt-2 text-[11px] font-medium">
-                {deltaPct === null ? (
-                  <span className="text-gray-400">{compareText}: n/a</span>
-                ) : (
-                  <span className={delta >= 0 ? 'text-rose-600' : 'text-emerald-600'}>
-                    {compareText}: {delta >= 0 ? '+' : ''}{deltaPct.toFixed(1)}%
-                  </span>
-                )}
+            <button
+              key={cat}
+              onClick={() => setSelectedCategory(active ? null : cat)}
+              className={`bg-white p-4 rounded-xl shadow-sm border border-gray-100 border-l-4 ${color.border} text-left transition-all hover:shadow-md hover:-translate-y-0.5 ${active ? 'ring-2 ring-blue-300' : ''}`}
+            >
+              <div className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1 truncate" title={cat}>
+                {getCategoryEmoji(cat)} {localizeCategory(cat)}
               </div>
-            )}
-          </button>
-        )})}
+              <div className="text-lg font-bold text-gray-900">${data.amount.toFixed(2)}</div>
+              <div className="mt-2 flex items-center justify-between">
+                <span className="text-xs text-gray-500 font-medium">{data.count} {t(language, 'txns')}</span>
+                <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${color.chip}`}>
+                  {stats.totalSpent > 0 ? ((data.amount / stats.totalSpent) * 100).toFixed(1) : '0.0'}%
+                </span>
+              </div>
+              {compareMode && (
+                <div className="mt-2 text-[11px] font-medium">
+                  {deltaPct === null ? (
+                    <span className="text-gray-400">{compareText}: {t(language, 'na')}</span>
+                  ) : (
+                    <span className={delta >= 0 ? 'text-rose-600' : 'text-emerald-600'}>
+                      {compareText}: {delta >= 0 ? '+' : ''}{deltaPct.toFixed(1)}%
+                    </span>
+                  )}
+                </div>
+              )}
+            </button>
+          );
+        })}
       </div>
 
       {selectedCategory && (
         <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
           <div className="flex items-center justify-between mb-3">
             <div className="text-sm font-semibold text-gray-700">
-              {getCategoryEmoji(selectedCategory)} {selectedCategory} Details
+              {getCategoryEmoji(selectedCategory)} {localizeCategory(selectedCategory)} {t(language, 'details_suffix')}
             </div>
             <button
               onClick={() => setSelectedCategory(null)}
               className="text-xs px-2 py-1 rounded border border-gray-200 text-gray-600 hover:bg-gray-50"
             >
-              Close
+              {t(language, 'close')}
             </button>
           </div>
           <div className="max-h-72 overflow-auto divide-y divide-gray-100">
-            {selectedCategoryTransactions.slice(0, 60).map((t, idx) => (
-              <div key={`${t.merchant}-${t.date}-${idx}`} className="py-2.5 flex items-center justify-between gap-3 text-sm">
+            {selectedCategoryTransactions.slice(0, 60).map((txn, idx) => (
+              <div key={`${txn.merchant}-${txn.date}-${idx}`} className="py-2.5 flex items-center justify-between gap-3 text-sm">
                 <div className="min-w-0">
-                  <div className="font-medium text-gray-800 truncate">{t.merchant}</div>
-                  <div className="text-xs text-gray-500">{new Date(t.date).toLocaleDateString('en-SG')}</div>
+                  <div className="font-medium text-gray-800 truncate">{txn.merchant}</div>
+                  <div className="text-xs text-gray-500">{new Date(txn.date).toLocaleDateString(language === 'zh' ? 'zh-CN' : 'en-SG')}</div>
                 </div>
-                <div className="font-bold text-gray-900 shrink-0">${t.amountAbs.toFixed(2)}</div>
+                <div className="font-bold text-gray-900 shrink-0">${txn.amountAbs.toFixed(2)}</div>
               </div>
             ))}
             {selectedCategoryTransactions.length === 0 && (
-              <div className="py-4 text-sm text-gray-500">No transactions in this category.</div>
+              <div className="py-4 text-sm text-gray-500">{t(language, 'no_transactions_in_category')}</div>
             )}
           </div>
         </div>

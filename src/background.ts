@@ -1,3 +1,5 @@
+import { getStoredLanguage, t } from './utils/i18n';
+
 const WEEKLY_REMINDER_ALARM = 'weekly-bank-login-reminder';
 
 const ensureWeeklyReminder = () => {
@@ -10,12 +12,13 @@ const ensureWeeklyReminder = () => {
   });
 };
 
-const notifyWeeklyReminder = () => {
+const notifyWeeklyReminder = async () => {
+  const language = await getStoredLanguage();
   chrome.notifications.create({
     type: 'basic',
     iconUrl: 'images/icon48.png',
-    title: 'Spending Track Weekly Reminder',
-    message: 'Login to UOB/DBS and run a scan to keep your cap tracking accurate.',
+    title: t(language, 'notif_title'),
+    message: t(language, 'notif_message'),
     priority: 1,
   });
 };
@@ -23,7 +26,7 @@ const notifyWeeklyReminder = () => {
 chrome.runtime.onInstalled.addListener(() => {
   ensureWeeklyReminder();
   // First-run nudge so users know reminder is now popup-based.
-  notifyWeeklyReminder();
+  void notifyWeeklyReminder();
 });
 
 chrome.runtime.onStartup.addListener(() => {
@@ -32,7 +35,7 @@ chrome.runtime.onStartup.addListener(() => {
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name !== WEEKLY_REMINDER_ALARM) return;
-  notifyWeeklyReminder();
+  void notifyWeeklyReminder();
 });
 
 chrome.notifications.onClicked.addListener(() => {

@@ -5,16 +5,18 @@ import { CardBenefitManager } from '../utils/card-benefits';
 import { TransactionCalculator } from '../utils/calculator';
 import { cn } from '../utils/cn';
 import { normalizeCategory } from '../utils/category-overrides';
+import { getCardDisplayDescription, getCardDisplayName, Language, t } from '../utils/i18n';
 
 interface Props {
   card: CardConfig;
   transactions: Transaction[];
   userElections?: string[];
   excludeReimbursable?: boolean;
+  language?: Language;
   onViewDetails: () => void;
 }
 
-export const CardBreakdown: React.FC<Props> = ({ card, transactions, userElections, excludeReimbursable = false, onViewDetails }) => {
+export const CardBreakdown: React.FC<Props> = ({ card, transactions, userElections, excludeReimbursable = false, language = 'en', onViewDetails }) => {
   const cardTransactions = CardBenefitManager.filterTransactionsForCard(transactions, card.id);
   const now = new Date();
   const monthlyTransactions = cardTransactions.filter(t => {
@@ -70,24 +72,24 @@ export const CardBreakdown: React.FC<Props> = ({ card, transactions, userElectio
       <div className="flex items-center gap-4 mb-4">
         <div className="text-3xl bg-gray-50 p-3 rounded-lg">{card.icon}</div>
         <div>
-          <h3 className="font-bold text-gray-900 leading-tight">{card.name}</h3>
-          <p className="text-xs text-gray-500 font-medium">{card.description}</p>
+          <h3 className="font-bold text-gray-900 leading-tight">{getCardDisplayName(card.id, language, card.name)}</h3>
+          <p className="text-xs text-gray-500 font-medium">{getCardDisplayDescription(card.id, language, card.description)}</p>
         </div>
       </div>
 
       <div className="space-y-4 flex-grow">
         <div>
           <div className="flex justify-between text-sm mb-2 font-medium">
-            <span className="text-gray-500">Total Spending</span>
+            <span className="text-gray-500">{t(language, 'total_spending')}</span>
             <span className="text-gray-900 font-bold">${displayedSpent.toFixed(2)}</span>
           </div>
           {excludeReimbursable ? (
-            <div className="text-[11px] text-gray-400 mb-2">Gross ${totalSpent.toFixed(2)} used for points/4 mpd</div>
+            <div className="text-[11px] text-gray-400 mb-2">{t(language, 'gross_used_for_points', { value: totalSpent.toFixed(2) })}</div>
           ) : (
-            <div className="text-[11px] text-gray-400 mb-2">Net ${netMonthlySpent.toFixed(2)} (excl. reimbursable)</div>
+            <div className="text-[11px] text-gray-400 mb-2">{t(language, 'net_excl_reimb', { value: netMonthlySpent.toFixed(2) })}</div>
           )}
           <div className="flex justify-between text-sm mb-2 font-medium">
-            <span className="text-gray-500">4 mpd Balance</span>
+            <span className="text-gray-500">{t(language, 'mpd_cap_remaining')}</span>
             <span className="text-gray-900 font-bold">${fourMpdBalance.toFixed(2)} / ${card.totalCap}</span>
           </div>
           <div className="w-full bg-gray-100 rounded-full h-2">
@@ -104,8 +106,8 @@ export const CardBreakdown: React.FC<Props> = ({ card, transactions, userElectio
               {uobCategoryRows.map(row => (
                 <div key={row.name} className="rounded bg-gray-50 px-2.5 py-2">
                   <div className="flex justify-between text-[11px] text-gray-600">
-                    <span>{row.name}</span>
-                    <span className="font-semibold">${row.remaining.toFixed(2)} balance</span>
+                    <span>{row.name === 'Dining' ? t(language, 'dining') : t(language, 'travel')}</span>
+                    <span className="font-semibold">${row.remaining.toFixed(2)} {t(language, 'balance_short')}</span>
                   </div>
                   <div className="w-full bg-gray-200 rounded-full h-1.5 mt-1">
                     <div
@@ -124,7 +126,7 @@ export const CardBreakdown: React.FC<Props> = ({ card, transactions, userElectio
         </div>
 
         <div className="pt-4 border-t border-gray-50">
-          <div className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">Top Categories</div>
+          <div className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">{t(language, 'top_categories')}</div>
           <div className="space-y-2">
             {topCategories.map(([cat, amount]) => (
               <div key={cat} className="flex justify-between items-center text-sm">
@@ -140,7 +142,7 @@ export const CardBreakdown: React.FC<Props> = ({ card, transactions, userElectio
         onClick={onViewDetails}
         className="w-full mt-6 py-2.5 px-4 bg-gray-900 text-white rounded-xl font-semibold text-sm hover:bg-black transition-colors"
       >
-        View Details
+        {t(language, 'view_details')}
       </button>
     </div>
   );

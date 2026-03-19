@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Transaction } from '../types';
 import { CardBenefitManager } from '../utils/card-benefits';
+import { Language, t } from '../utils/i18n';
 import {
   applyCategoryOverrides,
   updateOverridesForMerchant,
@@ -18,25 +19,31 @@ interface RewardInfo {
   raw?: string;
 }
 
-export const useScanner = () => {
+export const useScanner = (language: Language = 'en') => {
   const [isScanning, setIsScanning] = useState(false);
   const [progress, setProgress] = useState<ScanProgress | null>(null);
-  const [status, setStatus] = useState<string>('Ready');
+  const [status, setStatus] = useState<string>(t(language, 'scan_ready'));
+
+  useEffect(() => {
+    if (!isScanning) {
+      setStatus(t(language, 'scan_ready'));
+    }
+  }, [language, isScanning]);
 
   useEffect(() => {
     const messageListener = (request: any) => {
       if (request.action === "scan_progress") {
         setProgress({ current: request.current, total: request.total });
-        setStatus(`Scanning: ${request.current}/${request.total}`);
+        setStatus(t(language, 'scan_progress', { current: request.current, total: request.total }));
       }
     };
     chrome.runtime.onMessage.addListener(messageListener);
     return () => chrome.runtime.onMessage.removeListener(messageListener);
-  }, []);
+  }, [language]);
 
   const startScan = useCallback(async () => {
     setIsScanning(true);
-    setStatus('Initializing scan...');
+    setStatus(t(language, 'scan_initializing'));
     setProgress({ current: 0, total: 0 });
 
     try {
@@ -45,7 +52,7 @@ export const useScanner = () => {
 
       // Check if we can inject
       if (tab.url?.startsWith('chrome://')) {
-        setStatus('Cannot scan on chrome:// pages');
+        setStatus(t(language, 'scan_cannot_chrome_pages'));
         setIsScanning(false);
         return;
       }
@@ -61,7 +68,7 @@ export const useScanner = () => {
         }
 
         if (isAlive) return;
-        setStatus('Re-attaching to page...');
+        setStatus(t(language, 'scan_reattaching'));
         const manifest = chrome.runtime.getManifest();
         const contentScript = manifest.content_scripts?.[0]?.js?.[0];
         if (contentScript) {
@@ -105,7 +112,7 @@ export const useScanner = () => {
           const firstMsg = String(firstErr?.message || firstErr || '');
           if (!shouldRetryForTabLifecycle(firstMsg)) throw firstErr;
 
-          setStatus('Page changed, reconnecting and retrying...');
+          setStatus(t(language, 'scan_reconnecting'));
           await waitForTabComplete(tab.id!);
           await ensureContentScript();
 
@@ -114,7 +121,7 @@ export const useScanner = () => {
           } catch (secondErr: any) {
             const secondMsg = String(secondErr?.message || secondErr || '');
             if (!shouldRetryForTabLifecycle(secondMsg)) throw secondErr;
-            throw new Error('Page was reloading while switching UOB sections. Please wait 1-2 seconds and scan again.');
+            throw new Error(t(language, 'scan_retry_error'));
           }
         }
       };
@@ -133,7 +140,7 @@ export const useScanner = () => {
         const mergedRewards: RewardInfo[] = [];
 
         const scanSection = async (value: string, label: string) => {
-          setStatus(`UOB: scanning ${label}...`);
+          setStatus(t(language, 'scan_uob_section', { label }));
           const switchResp = await sendMessageWithRetry({ action: "uob_set_section", value });
           if (switchResp?.error) throw new Error(switchResp.error);
           const scanResp = await sendMessageWithRetry({ action: "extract_transactions" });
@@ -252,37 +259,39 @@ export const useScanner = () => {
             const sections = Array.isArray(response.sections)
               ? Array.from(new Set(response.sections.filter(Boolean)))
               : [];
-            const sectionHint = sections.length > 0 ? ` (${sections.join(' + ')})` : '';
             setStatus(
               response.cancelled
-                ? 'Scan stopped'
-                : `UOB transactions${sectionHint}: ${newTxnsWithOverrides.length}`
+                ? t(language, 'scan_stopped')
+                : t(language, 'scan_uob_transactions', {
+                    sections: sections.join(' + ') || '-',
+                    count: newTxnsWithOverrides.length
+                  })
             );
           } else if (rewards.length > 0) {
-            setStatus(response.cancelled ? 'Scan stopped' : `UOB rewards captured: ${rewards.length} items`);
+            setStatus(response.cancelled ? t(language, 'scan_stopped') : t(language, 'scan_uob_rewards', { count: rewards.length }));
           } else {
-            setStatus(response.cancelled ? 'Scan stopped' : 'No UOB transactions found in selected section');
+            setStatus(response.cancelled ? t(language, 'scan_stopped') : t(language, 'scan_uob_none'));
           }
         } else {
-          setStatus(response.cancelled ? 'Scan stopped' : `Found ${newTxnsWithOverrides.length} new transactions`);
+          setStatus(response.cancelled ? t(language, 'scan_stopped') : t(language, 'scan_found_new', { count: newTxnsWithOverrides.length }));
         }
       }
     } catch (err: any) {
       console.error(err);
-      setStatus(`Error: ${err.message || 'Connection failed'}`);
+      setStatus(`${t(language, 'error_prefix')}: ${err.message || 'Connection failed'}`);
     } finally {
       setIsScanning(false);
       setProgress(null);
     }
-  }, []);
+  }, [language]);
 
   const stopScan = useCallback(async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tab?.id) {
       chrome.tabs.sendMessage(tab.id, { action: "cancel_scan" });
-      setStatus('Stopping...');
+      setStatus(t(language, 'scan_stopping'));
     }
-  }, []);
+  }, [language]);
 
   return { isScanning, progress, status, startScan, stopScan };
 };
