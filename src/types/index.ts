@@ -3,6 +3,7 @@ export interface CategoryConfig {
   mpd: number;
   autoEligible?: boolean;
   keywords?: string[];
+  excludedKeywords?: string[];
   categoryKeywords?: string[];
   paymentTypes?: string[];
 }
@@ -26,6 +27,10 @@ export interface Transaction {
   merchant: string;
   category: string;
   amount: number;
+  reimbursable?: boolean;
+  cardId?: string;
+  source?: string;
+  uobSection?: string;
   transactionType?: string;
   paymentType?: string;
   originalIndex?: number;

@@ -8,21 +8,34 @@ import { Play, Square, ExternalLink, RefreshCw } from 'lucide-react';
 export const Popup: React.FC = () => {
   const { isScanning, progress, status, startScan, stopScan } = useScanner();
   const [cardStats, setCardStats] = useState<any[]>([]);
+  const [uobRewards, setUobRewards] = useState<Array<{ label: string; value: number }>>([]);
 
   useEffect(() => {
     loadStats();
   }, [isScanning]);
 
   const loadStats = async () => {
-    const data = await chrome.storage.local.get('transactions') as { transactions?: Transaction[] };
+    const data = await chrome.storage.local.get(['transactions', 'uobRewards', 'cardConfigs']) as {
+      transactions?: Transaction[];
+      uobRewards?: Array<{ label: string; value: number }>;
+      cardConfigs?: Record<string, string[]>;
+    };
     const txns = data.transactions || [];
+    setUobRewards(data.uobRewards || []);
     
     const stats = CardBenefitManager.getAllCards().map(card => {
       const stats = TransactionCalculator.calculateStats(txns, card.id);
+      const uobDetail = card.id === 'UOB_LADYS'
+        ? TransactionCalculator.calculateUobEligibleSpend(
+            CardBenefitManager.filterTransactionsForCard(txns, card.id),
+            data.cardConfigs?.[card.id] || null
+          )
+        : null;
       return {
         ...card,
         spent: stats.totalSpent,
-        miles: stats.expectedMiles
+        miles: stats.expectedMiles,
+        uobDetail
       };
     });
     setCardStats(stats);
@@ -30,6 +43,14 @@ export const Popup: React.FC = () => {
 
   const openDashboard = () => {
     chrome.tabs.create({ url: 'dashboard/dashboard.html' });
+  };
+
+  const openUobBanking = () => {
+    chrome.tabs.create({ url: 'https://pib.uob.com.sg/PIBLogin/public/processPreCapture.do' });
+  };
+
+  const openDbsBanking = () => {
+    chrome.tabs.create({ url: 'https://internet-banking.dbs.com.sg/IB/Welcome' });
   };
 
   const resetData = async () => {
@@ -75,6 +96,31 @@ export const Popup: React.FC = () => {
                 style={{ width: `${Math.min(100, (card.spent / card.totalCap) * 100)}%` }} 
               />
             </div>
+            {card.id === 'UOB_LADYS' && card.uobDetail && (
+              <div className="mt-2 space-y-1">
+                {['Dining', 'Travel'].map((cat) => {
+                  const used = Number(card.uobDetail.categorySpent?.[cat] || 0);
+                  const cap = Number(card.uobDetail.perCategoryCap || 750);
+                  const remaining = Math.max(0, cap - used);
+                  const pct = Math.min(100, cap > 0 ? (used / cap) * 100 : 0);
+                  return (
+                    <div key={cat} className="text-[10px] text-gray-500">
+                      <div className="flex justify-between">
+                        <span>{cat}</span>
+                        <span>bal ${remaining.toFixed(0)}</span>
+                      </div>
+                      <div className="w-full bg-gray-200 rounded-full h-1 mt-0.5">
+                        <div
+                          className={`h-full rounded-full transition-all duration-500 ${cat === 'Dining' ? 'bg-emerald-500' : 'bg-violet-500'}`}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                      <div className="mt-0.5">${used.toFixed(0)} / ${cap}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -113,6 +159,20 @@ export const Popup: React.FC = () => {
         </div>
       </div>
 
+      {uobRewards.length > 0 && (
+        <div className="bg-amber-50 rounded-xl p-4 mb-4 border border-amber-100">
+          <div className="text-xs font-bold text-amber-800 mb-2">Latest UOB Rewards</div>
+          <div className="space-y-1.5">
+            {uobRewards.slice(0, 3).map((item, idx) => (
+              <div key={`${item.label}-${idx}`} className="flex justify-between gap-2 text-xs">
+                <span className="text-amber-900 truncate">{item.label}</span>
+                <span className="text-amber-700 font-bold">{item.value.toLocaleString()}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="flex justify-between items-center text-[10px] text-gray-400">
         <button 
           onClick={resetData}
@@ -121,6 +181,24 @@ export const Popup: React.FC = () => {
           <RefreshCw size={10} /> Reset All Data
         </button>
         <div className="font-medium">Version 1.0.0</div>
+      </div>
+      <div className="mt-3 bg-gray-50 border border-gray-100 rounded-lg p-2.5">
+        <div className="text-[10px] font-semibold text-gray-600 mb-2">Weekly Update Reminder</div>
+        <div className="flex gap-2 mb-1.5">
+          <button
+            onClick={openUobBanking}
+            className="flex-1 text-[10px] px-2 py-1.5 rounded bg-white border border-gray-200 hover:bg-gray-100 text-gray-700 font-semibold"
+          >
+            Open UOB
+          </button>
+          <button
+            onClick={openDbsBanking}
+            className="flex-1 text-[10px] px-2 py-1.5 rounded bg-white border border-gray-200 hover:bg-gray-100 text-gray-700 font-semibold"
+          >
+            Open DBS
+          </button>
+        </div>
+        <div className="text-[10px] text-gray-500">Login to both banks and run scan once a week to keep caps accurate.</div>
       </div>
     </div>
   );

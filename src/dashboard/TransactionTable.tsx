@@ -10,6 +10,7 @@ import {
 } from '@tanstack/react-table';
 import { Transaction } from '../types';
 import { CardBenefitManager } from '../utils/card-benefits';
+import { normalizeCategory } from '../utils/category-overrides';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -22,9 +23,24 @@ interface Props {
   cardId: string;
   userElections?: string[];
   onCategoryChange?: (txn: Transaction, newCategory: string) => void;
+  onReimbursableChange?: (txn: Transaction, reimbursable: boolean) => void;
 }
 
 const columnHelper = createColumnHelper<Transaction>();
+const COMMON_CATEGORY_OPTIONS = [
+  'Beauty & Wellness',
+  'Dining',
+  'Family',
+  'Fashion',
+  'Travel',
+  'Transport',
+  'Shopping',
+  'Groceries',
+  'Entertainment',
+  'Bills',
+  'Online Spending',
+  'Uncategorized',
+];
 
 const getDateSortValue = (dateStr: string) => {
   const t = new Date(dateStr).getTime();
@@ -46,54 +62,52 @@ const getDbsPointsBreakdown = (amount: number, totalMpd: number, baseMpd: number
 const CategoryCell: React.FC<{
   value: string;
   onCommit?: (val: string) => void;
-  listId: string;
-}> = ({ value, onCommit, listId }) => {
-  const [draft, setDraft] = React.useState(value || '');
+  options: string[];
+}> = ({ value, onCommit, options }) => {
+  const [draft, setDraft] = React.useState(value || 'Uncategorized');
 
   React.useEffect(() => {
-    setDraft(value || '');
+    setDraft(value || 'Uncategorized');
   }, [value]);
 
-  const commit = () => {
-    if (!onCommit) return;
-    const trimmed = draft.trim() || 'Uncategorized';
-    if (trimmed !== (value || '')) onCommit(trimmed);
-  };
-
   return (
-    <input
+    <select
       value={draft}
-      list={listId}
-      onChange={e => setDraft(e.target.value)}
-      onBlur={commit}
-      onKeyDown={e => {
-        if (e.key === 'Enter') {
-          (e.target as HTMLInputElement).blur();
+      onChange={e => {
+        const next = e.target.value || 'Uncategorized';
+        setDraft(next);
+        if (onCommit && next !== (value || 'Uncategorized')) {
+          onCommit(next);
         }
       }}
       className={cn(
         "w-full max-w-[220px] px-2 py-1 rounded text-xs border border-gray-200 bg-gray-50 text-gray-700",
         onCommit ? "focus:ring-2 focus:ring-blue-500 focus:bg-white" : "opacity-70 cursor-not-allowed"
       )}
-      readOnly={!onCommit}
-    />
+      disabled={!onCommit}
+    >
+      {options.map(opt => (
+        <option key={opt} value={opt}>{opt}</option>
+      ))}
+    </select>
   );
 };
 
-export const TransactionTable: React.FC<Props> = ({ transactions, cardId, userElections, onCategoryChange }) => {
+export const TransactionTable: React.FC<Props> = ({ transactions, cardId, userElections, onCategoryChange, onReimbursableChange }) => {
   const [sorting, setSorting] = React.useState<SortingState>([{ id: 'date', desc: true }]);
   const [globalFilter, setGlobalFilter] = React.useState('');
 
   const cardConfig = CardBenefitManager.getCardConfig(cardId);
   const baseMpd = cardConfig?.fallbackMPD ?? 0.4;
-  const categoryListId = `category-list-${cardId}`;
+  const pointsHeader = cardId === 'UOB_LADYS' ? 'UOB Points' : cardId === 'DBS_WWMC' ? 'DBS Points' : 'Points';
 
   const categorySuggestions = useMemo(() => {
     const set = new Set<string>();
+    COMMON_CATEGORY_OPTIONS.forEach(c => set.add(c));
     transactions.forEach(t => {
-      if (t.category) set.add(t.category);
+      if (t.category) set.add(normalizeCategory(t.category));
     });
-    Object.keys(cardConfig?.categories || {}).forEach(c => set.add(c));
+    Object.keys(cardConfig?.categories || {}).forEach(c => set.add(normalizeCategory(c)));
     set.add('Uncategorized');
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [transactions, cardConfig]);
@@ -101,7 +115,11 @@ export const TransactionTable: React.FC<Props> = ({ transactions, cardId, userEl
   const getPoints = (txn: Transaction) => {
     const eligibility = CardBenefitManager.isTransactionEligible(txn, cardId, userElections);
     const totalMpd = eligibility.eligible ? eligibility.mpd : baseMpd;
-    return getDbsPointsBreakdown(Math.abs(txn.amount), totalMpd, baseMpd);
+    const amount = Math.abs(txn.amount);
+    const pointsAmount = cardId === 'UOB_LADYS'
+      ? Math.floor(amount / 5) * 5
+      : amount;
+    return getDbsPointsBreakdown(pointsAmount, totalMpd, baseMpd);
   };
 
   const columns = useMemo(() => [
@@ -122,8 +140,8 @@ export const TransactionTable: React.FC<Props> = ({ transactions, cardId, userEl
       header: 'Category',
       cell: info => (
         <CategoryCell
-          value={info.getValue() || 'Uncategorized'}
-          listId={categoryListId}
+          value={normalizeCategory(info.getValue() || 'Uncategorized')}
+          options={categorySuggestions}
           onCommit={onCategoryChange ? (val) => onCategoryChange(info.row.original, val) : undefined}
         />
       ),
@@ -131,6 +149,24 @@ export const TransactionTable: React.FC<Props> = ({ transactions, cardId, userEl
     columnHelper.accessor('amount', {
       header: 'Amount',
       cell: info => <span className="font-semibold text-gray-900">${Math.abs(info.getValue()).toFixed(2)}</span>,
+    }),
+    columnHelper.display({
+      id: 'reimbursable',
+      header: 'Reimb.',
+      cell: info => {
+        const txn = info.row.original;
+        return (
+          <label className="inline-flex items-center gap-1.5 text-xs text-gray-600">
+            <input
+              type="checkbox"
+              checked={Boolean(txn.reimbursable)}
+              onChange={(e) => onReimbursableChange?.(txn, e.target.checked)}
+              className="h-3.5 w-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            Yes
+          </label>
+        );
+      }
     }),
     columnHelper.accessor('paymentType', {
       header: 'Type',
@@ -160,7 +196,7 @@ export const TransactionTable: React.FC<Props> = ({ transactions, cardId, userEl
     }),
     columnHelper.display({
       id: 'dbs_points',
-      header: 'DBS Points',
+      header: pointsHeader,
       cell: props => {
         const points = getPoints(props.row.original);
         return (
@@ -182,7 +218,7 @@ export const TransactionTable: React.FC<Props> = ({ transactions, cardId, userEl
         );
       }
     }),
-  ], [cardId, userElections, onCategoryChange, baseMpd, categoryListId]);
+  ], [cardId, userElections, onCategoryChange, onReimbursableChange, baseMpd, categorySuggestions, pointsHeader]);
 
   const table = useReactTable({
     data: transactions,
@@ -209,11 +245,6 @@ export const TransactionTable: React.FC<Props> = ({ transactions, cardId, userEl
         />
       </div>
       <div className="overflow-x-auto">
-        <datalist id={categoryListId}>
-          {categorySuggestions.map(cat => (
-            <option key={cat} value={cat} />
-          ))}
-        </datalist>
         <table className="w-full text-left border-collapse">
           <thead>
             {table.getHeaderGroups().map(headerGroup => (
@@ -254,9 +285,12 @@ export const TransactionTable: React.FC<Props> = ({ transactions, cardId, userEl
                 ${transactions.reduce((acc, t) => acc + Math.abs(t.amount), 0).toFixed(2)}
               </td>
               <td></td>
+              <td className="px-6 py-4 text-gray-900">
+                ${transactions.reduce((acc, t) => acc + (t.reimbursable ? 0 : Math.abs(t.amount)), 0).toFixed(2)} net
+              </td>
               <td className="px-6 py-4 text-blue-600"></td>
               <td className="px-6 py-4 text-blue-700">
-                {transactions.reduce((acc, t) => acc + getPoints(t).totalPoints, 0).toLocaleString()} pts
+                {transactions.reduce((acc, t) => acc + getPoints(t).totalPoints, 0).toLocaleString()} points
               </td>
               <td className="px-6 py-4 text-blue-700">
                 {transactions.reduce((acc, t) => acc + getPoints(t).miles, 0).toLocaleString()} miles

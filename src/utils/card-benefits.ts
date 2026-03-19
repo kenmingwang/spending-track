@@ -14,6 +14,18 @@ export const CARD_BENEFITS: Record<string, CardConfig> = {
         mpd: 4,
         autoEligible: true,
         keywords: ['SHOPEE', 'LAZADA', 'AMAZON', 'REDMART', 'TAOBAO', 'GRAB', 'GOJEK', 'TADA', 'FOODPANDA', 'DELIVEROO', 'SIA', 'SCOOT', 'AIRASIA', 'AGODA', 'KLOOK', 'PELAGO', 'NETFLIX', 'SPOTIFY'],
+        excludedKeywords: [
+          'AMAZE',
+          'CARDUP',
+          'IPAYMY',
+          'AXS',
+          'SAM',
+          'SGEBIZ',
+          'SINGTEL DASH',
+          'YOUTRIP',
+          'SHOPEEPAY',
+          'FAVEPAY'
+        ],
         paymentTypes: ['ONLINE', 'IN-APP']
       },
       'Overseas Offline': {
@@ -26,11 +38,60 @@ export const CARD_BENEFITS: Record<string, CardConfig> = {
       }
     },
     fallbackMPD: 0.4,
-    description: '4 mpd on Online Spending ($1k cap), 1.2 mpd on Overseas Offline (no cap)'
+    description: '4 mpd on online spend (S$1k monthly cap), 1.2 mpd on overseas offline FCY spend'
+  },
+  'UOB_LADYS': {
+    id: 'UOB_LADYS',
+    name: 'UOB Lady\'s Solitaire Card',
+    totalCap: 1500,
+    icon: '💳',
+    requiresElection: true,
+    maxElectable: 2,
+    sharedCap: true,
+    categories: {},
+    electableCategories: {
+      'Dining': {
+        cap: 750,
+        mpd: 4,
+        autoEligible: true,
+        keywords: [
+          'FOOD PANDA', 'FOODPANDA', 'DELIVEROO', 'GRABFOOD', 'SMP_SUPER SIMPLE', 'MCDONALD',
+          'KFC', 'BURGER KING', 'STARBUCKS', 'PAUL', 'BLUE BOTTLE', 'NIKAIKU', 'GOKOKU',
+          'RESTAURANT', 'CAFE', 'BAKERY', 'B FOR BAGEL'
+        ]
+      },
+      'Travel': {
+        cap: 750,
+        mpd: 4,
+        autoEligible: true,
+        keywords: [
+          'AGODA', 'BOOKING', 'TRIP', 'AIRASIA', 'SINGAPORE AIRLINES', 'SIA', 'SCOOT',
+          'JETSTAR', 'EXPEDIA', 'HOTELS', 'UBER', 'GRAB', 'GOJEK', 'TADA', 'COMFORTDELGRO', 'CDG'
+        ]
+      }
+    },
+    fallbackMPD: 0.4,
+    description: '4 mpd on 2 selected categories, S$1,500 monthly aggregate cap and S$750 per selected category cap'
   }
 };
 
 export class CardBenefitManager {
+  static getEffectiveUserElections(cardId: string, userElections: string[] | null = null): string[] | null {
+    if (userElections && userElections.length > 0) return userElections;
+    if (cardId === 'UOB_LADYS') return ['Dining', 'Travel'];
+    return userElections;
+  }
+
+  static normalizeTransactionCardId(transaction: Transaction): string {
+    if (transaction.cardId) return transaction.cardId;
+    if ((transaction.source || '').toUpperCase() === 'UOB') return 'UOB_LADYS';
+    return 'DBS_WWMC';
+  }
+
+  static filterTransactionsForCard(transactions: Transaction[], cardId: string): Transaction[] {
+    return transactions.filter(t => this.normalizeTransactionCardId(t) === cardId);
+  }
+
   static getCardConfig(cardId: string): CardConfig | undefined {
     return CARD_BENEFITS[cardId];
   }
@@ -46,6 +107,7 @@ export class CardBenefitManager {
   ) {
     const card = this.getCardConfig(cardId);
     if (!card) return { eligible: false, mpd: 0.4, matchedCategory: null };
+    const effectiveElections = this.getEffectiveUserElections(cardId, userElections);
 
     const merchant = (transaction.merchant || '').toUpperCase();
     const category = (transaction.category || '').toUpperCase();
@@ -55,8 +117,8 @@ export class CardBenefitManager {
     const categoriesToCheck = { ...card.categories };
     
     // Add user elected categories if applicable
-    if (card.requiresElection && userElections && card.electableCategories) {
-      userElections.forEach(catName => {
+    if (card.requiresElection && effectiveElections && card.electableCategories) {
+      effectiveElections.forEach(catName => {
         if (card.electableCategories?.[catName]) {
           categoriesToCheck[catName] = card.electableCategories[catName];
         }
@@ -86,6 +148,12 @@ export class CardBenefitManager {
         isMatch = catConfig.paymentTypes.some(pt => paymentType.includes(pt.toUpperCase()));
       }
 
+      // 5. Exclusion filter (for cards/categories with explicit bank exclusions)
+      if (isMatch && catConfig.excludedKeywords && catConfig.excludedKeywords.length > 0) {
+        const isExcluded = catConfig.excludedKeywords.some(kw => merchant.includes(kw.toUpperCase()));
+        if (isExcluded) isMatch = false;
+      }
+
       if (isMatch) {
         return { eligible: true, mpd: catConfig.mpd, matchedCategory: catName };
       }
@@ -101,13 +169,15 @@ export class CardBenefitManager {
   ) {
     const card = this.getCardConfig(cardId);
     if (!card) return {};
+    const scopedTransactions = this.filterTransactionsForCard(transactions, cardId);
+    const effectiveElections = this.getEffectiveUserElections(cardId, userElections);
 
     const spending: Record<string, { spent: number; cap: number; remaining: number; mpd: number }> = {};
     
     // Initialize categories
     const relevantCategories = { ...card.categories };
-    if (card.requiresElection && userElections && card.electableCategories) {
-      userElections.forEach(catName => {
+    if (card.requiresElection && effectiveElections && card.electableCategories) {
+      effectiveElections.forEach(catName => {
         if (card.electableCategories?.[catName]) {
           relevantCategories[catName] = card.electableCategories[catName];
         }
@@ -121,9 +191,9 @@ export class CardBenefitManager {
     // Add fallback category
     spending['Others'] = { spent: 0, cap: Infinity, remaining: Infinity, mpd: card.fallbackMPD };
 
-    transactions.forEach(t => {
+    scopedTransactions.forEach(t => {
       const amount = Math.abs(t.amount);
-      const eligibility = this.isTransactionEligible(t, cardId, userElections);
+      const eligibility = this.isTransactionEligible(t, cardId, effectiveElections);
       
       if (eligibility.eligible && eligibility.matchedCategory) {
         spending[eligibility.matchedCategory].spent += amount;
