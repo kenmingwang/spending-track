@@ -10,6 +10,7 @@ import {
 } from '@tanstack/react-table';
 import { Transaction } from '../types';
 import { CardBenefitManager } from '../utils/card-benefits';
+import { TransactionCalculator } from '../utils/calculator';
 import { normalizeCategory } from '../utils/category-overrides';
 import { Language, t } from '../utils/i18n';
 import { clsx, type ClassValue } from 'clsx';
@@ -25,6 +26,7 @@ interface Props {
   userElections?: string[];
   onCategoryChange?: (txn: Transaction, newCategory: string) => void;
   onReimbursableChange?: (txn: Transaction, reimbursable: boolean) => void;
+  onHsbcContactlessOptOutChange?: (txn: Transaction, optOut: boolean) => void;
   language?: Language;
 }
 
@@ -39,6 +41,7 @@ const COMMON_CATEGORY_OPTIONS = [
   'Shopping',
   'Groceries',
   'Entertainment',
+  'Memberships',
   'Bills',
   'Online Spending',
   'Uncategorized',
@@ -47,18 +50,6 @@ const COMMON_CATEGORY_OPTIONS = [
 const getDateSortValue = (dateStr: string) => {
   const t = new Date(dateStr).getTime();
   return Number.isNaN(t) ? 0 : t;
-};
-
-const getDbsPointsBreakdown = (amount: number, totalMpd: number, baseMpd: number) => {
-  const basePoints = Math.floor(amount / 5);
-  if (totalMpd <= baseMpd) {
-    return { basePoints, bonusPoints: 0, totalPoints: basePoints, miles: basePoints * 2 };
-  }
-  const totalMultiplier = totalMpd / baseMpd; // e.g. 4 / 0.4 = 10X
-  const bonusMultiplier = Math.max(0, totalMultiplier - 1);
-  const bonusPoints = Math.floor((amount / 5) * bonusMultiplier);
-  const totalPoints = basePoints + bonusPoints;
-  return { basePoints, bonusPoints, totalPoints, miles: totalPoints * 2 };
 };
 
 const CategoryCell: React.FC<{
@@ -95,14 +86,20 @@ const CategoryCell: React.FC<{
   );
 };
 
-export const TransactionTable: React.FC<Props> = ({ transactions, cardId, userElections, onCategoryChange, onReimbursableChange, language = 'en' }) => {
+export const TransactionTable: React.FC<Props> = ({ transactions, cardId, userElections, onCategoryChange, onReimbursableChange, onHsbcContactlessOptOutChange, language = 'en' }) => {
   const [sorting, setSorting] = React.useState<SortingState>([{ id: 'date', desc: true }]);
   const [globalFilter, setGlobalFilter] = React.useState('');
   const locale = language === 'zh' ? 'zh-CN' : 'en-SG';
 
   const cardConfig = CardBenefitManager.getCardConfig(cardId);
   const baseMpd = cardConfig?.fallbackMPD ?? 0.4;
-  const pointsHeader = cardId === 'UOB_LADYS' ? `UOB ${t(language, 'points')}` : cardId === 'DBS_WWMC' ? `DBS ${t(language, 'points')}` : t(language, 'points');
+  const pointsHeader = cardId === 'UOB_LADYS'
+    ? `UOB ${t(language, 'points')}`
+    : cardId === 'DBS_WWMC'
+      ? `DBS ${t(language, 'points')}`
+      : cardId === 'HSBC_REVOLUTION'
+        ? `HSBC ${t(language, 'points')}`
+        : t(language, 'points');
 
   const categorySuggestions = useMemo(() => {
     const set = new Set<string>();
@@ -115,15 +112,7 @@ export const TransactionTable: React.FC<Props> = ({ transactions, cardId, userEl
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [transactions, cardConfig]);
 
-  const getPoints = (txn: Transaction) => {
-    const eligibility = CardBenefitManager.isTransactionEligible(txn, cardId, userElections);
-    const totalMpd = eligibility.eligible ? eligibility.mpd : baseMpd;
-    const amount = Math.abs(txn.amount);
-    const pointsAmount = cardId === 'UOB_LADYS'
-      ? Math.floor(amount / 5) * 5
-      : amount;
-    return getDbsPointsBreakdown(pointsAmount, totalMpd, baseMpd);
-  };
+  const getPoints = (txn: Transaction) => TransactionCalculator.calculateRewardOutcome(txn, cardId, userElections || null);
 
   const columns = useMemo(() => [
     columnHelper.accessor('date', {
@@ -174,7 +163,39 @@ export const TransactionTable: React.FC<Props> = ({ transactions, cardId, userEl
     columnHelper.accessor('paymentType', {
       header: t(language, 'type'),
       cell: info => {
+        const txn = info.row.original;
         const val = info.getValue()?.toUpperCase() || '';
+
+        if (cardId === 'HSBC_REVOLUTION') {
+          const isOnline = val.includes('ONLINE') || val.includes('IN-APP');
+          const isPhysical = val.includes('PHYSICAL');
+          const isContactless = val.includes('CONTACTLESS');
+
+          if (isOnline) {
+            return <span className="text-blue-600 text-xs font-medium">{t(language, 'online_inapp')}</span>;
+          }
+
+          return (
+            <div className="flex items-center gap-2">
+              <span className={cn(
+                "text-xs font-medium",
+                isPhysical ? "text-gray-500" : "text-orange-600"
+              )}>
+                {isPhysical ? 'Physical / no tap' : t(language, 'offline_contactless')}
+              </span>
+              {onHsbcContactlessOptOutChange && (
+                <button
+                  type="button"
+                  onClick={() => onHsbcContactlessOptOutChange(txn, !Boolean(txn.hsbcContactlessOptOut))}
+                  className="px-2 py-0.5 rounded border border-gray-200 text-[10px] text-gray-600 hover:bg-gray-50"
+                >
+                  {txn.hsbcContactlessOptOut ? 'Assume tap' : 'No'}
+                </button>
+              )}
+            </div>
+          );
+        }
+
         if (val.includes('ONLINE') || val.includes('IN-APP')) return <span className="text-blue-600 text-xs font-medium">{t(language, 'online_inapp')}</span>;
         if (val.includes('PHYSICAL') || val.includes('CONTACTLESS')) return <span className="text-orange-600 text-xs font-medium">{t(language, 'offline_contactless')}</span>;
         return <span className="text-gray-400 text-xs italic">{t(language, 'na')}</span>;
@@ -203,8 +224,8 @@ export const TransactionTable: React.FC<Props> = ({ transactions, cardId, userEl
       cell: props => {
         const points = getPoints(props.row.original);
         return (
-          <span className={cn("text-xs font-semibold", points.totalPoints > 0 ? "text-blue-700" : "text-gray-400")}>
-            {points.totalPoints.toLocaleString()}
+          <span className={cn("text-xs font-semibold", points.points > 0 ? "text-blue-700" : "text-gray-400")}>
+            {points.points.toLocaleString()}
           </span>
         );
       }
@@ -221,7 +242,7 @@ export const TransactionTable: React.FC<Props> = ({ transactions, cardId, userEl
         );
       }
     }),
-  ], [cardId, userElections, onCategoryChange, onReimbursableChange, baseMpd, categorySuggestions, pointsHeader, language, locale]);
+  ], [cardId, userElections, onCategoryChange, onReimbursableChange, onHsbcContactlessOptOutChange, baseMpd, categorySuggestions, pointsHeader, language, locale]);
 
   const table = useReactTable({
     data: transactions,
@@ -293,7 +314,7 @@ export const TransactionTable: React.FC<Props> = ({ transactions, cardId, userEl
               </td>
               <td className="px-6 py-4 text-blue-600"></td>
               <td className="px-6 py-4 text-blue-700">
-                {transactions.reduce((acc, t) => acc + getPoints(t).totalPoints, 0).toLocaleString()} {t(language, 'points_label')}
+                {transactions.reduce((acc, t) => acc + getPoints(t).points, 0).toLocaleString()} {t(language, 'points_label')}
               </td>
               <td className="px-6 py-4 text-blue-700">
                 {transactions.reduce((acc, t) => acc + getPoints(t).miles, 0).toLocaleString()} {t(language, 'miles_label')}

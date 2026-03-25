@@ -12,6 +12,7 @@ import {
   updateOverridesForMerchant,
   type CategoryOverrides
 } from '../utils/category-overrides';
+import { enrichHsbcTransactionInference } from '../utils/merchant-category';
 import { getCardDisplayName, t } from '../utils/i18n';
 import { useLanguage } from '../utils/useLanguage';
 
@@ -26,22 +27,30 @@ export const Dashboard: React.FC = () => {
   const [insightYear, setInsightYear] = useState<string>('');
   const [userElections, setUserElections] = useState<Record<string, string[]>>({});
   const [categoryOverrides, setCategoryOverrides] = useState<CategoryOverrides>({});
+  const [cardLastUpdated, setCardLastUpdated] = useState<Record<string, string>>({});
 
   useEffect(() => {
     loadData();
   }, []);
 
-  const openUobBanking = () => chrome.tabs.create({ url: 'https://pib.uob.com.sg/PIBLogin/public/processPreCapture.do' });
+  const openUobBanking = () => chrome.tabs.create({ url: 'https://pib.uob.com.sg/PIBLogin/Public/processPreCapture.do?keyId=lpc' });
   const openDbsBanking = () => chrome.tabs.create({ url: 'https://internet-banking.dbs.com.sg/IB/Welcome' });
 
   const loadData = async () => {
-    const data = await chrome.storage.local.get(['transactions', 'cardConfigs', 'categoryOverrides']) as {
+    const data = await chrome.storage.local.get(['transactions', 'cardConfigs', 'categoryOverrides', 'cardLastUpdated']) as {
       transactions?: Transaction[];
       cardConfigs?: Record<string, string[]>;
       categoryOverrides?: CategoryOverrides;
+      cardLastUpdated?: Record<string, string>;
     };
     const overrides = data.categoryOverrides || {};
-    const txns = applyCategoryOverrides(data.transactions || [], overrides);
+    const rawTransactions = data.transactions || [];
+    const enrichedTransactions = rawTransactions.map(enrichHsbcTransactionInference);
+    const txns = applyCategoryOverrides(enrichedTransactions, overrides);
+    const hasBackfilledTransactions = enrichedTransactions.some((txn, index) => (
+      txn.category !== rawTransactions[index]?.category ||
+      txn.paymentType !== rawTransactions[index]?.paymentType
+    ));
     const mergedCardConfigs = {
       UOB_LADYS: ['Dining', 'Travel'],
       ...(data.cardConfigs || {})
@@ -49,6 +58,10 @@ export const Dashboard: React.FC = () => {
     setAllTransactions(txns);
     setUserElections(mergedCardConfigs);
     setCategoryOverrides(overrides);
+    setCardLastUpdated(data.cardLastUpdated || {});
+    if (hasBackfilledTransactions) {
+      await chrome.storage.local.set({ transactions: txns });
+    }
 
     if (txns.length > 0 && !selectedMonth) {
       const months = Object.keys(TransactionCalculator.groupTransactionsByMonth(txns)).sort((a, b) => b.localeCompare(a));
@@ -90,13 +103,21 @@ export const Dashboard: React.FC = () => {
     [allTransactions, excludeReimbursable]
   );
 
+  const homepageMonthTransactions = useMemo(() => {
+    const now = new Date();
+    return allTransactions.filter((txn) => {
+      const date = new Date(txn.date);
+      return !Number.isNaN(date.getTime()) && date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth();
+    });
+  }, [allTransactions]);
+
   const grossTotalSpend = useMemo(
-    () => allTransactions.reduce((acc, txn) => acc + Math.abs(txn.amount), 0),
-    [allTransactions]
+    () => homepageMonthTransactions.reduce((acc, txn) => acc + Math.abs(txn.amount), 0),
+    [homepageMonthTransactions]
   );
   const netTotalSpend = useMemo(
-    () => allTransactions.reduce((acc, txn) => acc + (txn.reimbursable ? 0 : Math.abs(txn.amount)), 0),
-    [allTransactions]
+    () => homepageMonthTransactions.reduce((acc, txn) => acc + (txn.reimbursable ? 0 : Math.abs(txn.amount)), 0),
+    [homepageMonthTransactions]
   );
 
   const overallInsightTransactions = useMemo(() => {
@@ -114,7 +135,7 @@ export const Dashboard: React.FC = () => {
   const filteredTransactions = useMemo(() => {
     let txns = allTransactions;
     if (currentCard) {
-      txns = txns.filter(txn => (txn.cardId || 'DBS_WWMC') === currentCard);
+      txns = txns.filter(txn => CardBenefitManager.normalizeTransactionCardId(txn) === currentCard);
     }
     if (selectedMonth) {
       const groups = TransactionCalculator.groupTransactionsByMonth(txns);
@@ -139,6 +160,20 @@ export const Dashboard: React.FC = () => {
     const updatedTransactions = allTransactions.map(item => item === txn ? { ...item, reimbursable } : item);
     setAllTransactions(updatedTransactions);
     await chrome.storage.local.set({ transactions: updatedTransactions });
+  };
+
+  const handleHsbcContactlessOptOutChange = async (txn: Transaction, optOut: boolean) => {
+    const updatedTransactions = allTransactions.map(item => {
+      if (item !== txn) return item;
+      return {
+        ...item,
+        hsbcContactlessOptOut: optOut,
+        paymentType: '',
+      };
+    });
+    const refreshedTransactions = updatedTransactions.map(enrichHsbcTransactionInference);
+    setAllTransactions(refreshedTransactions);
+    await chrome.storage.local.set({ transactions: refreshedTransactions });
   };
 
   if (!currentCard) {
@@ -200,6 +235,7 @@ export const Dashboard: React.FC = () => {
                 userElections={userElections[card.id]}
                 excludeReimbursable={excludeReimbursable}
                 language={language}
+                lastUpdatedAt={cardLastUpdated[card.id]}
                 onViewDetails={() => setCurrentCard(card.id)}
               />
             ))}
@@ -257,10 +293,14 @@ export const Dashboard: React.FC = () => {
   }
 
   const cardConfig = CardBenefitManager.getCardConfig(currentCard)!;
+  const currentCardCap = CardBenefitManager.getCardTotalCap(currentCard);
   const stats = TransactionCalculator.calculateStats(filteredTransactions, currentCard, userElections[currentCard]);
   const netSpent = filteredTransactions.reduce((acc, txn) => acc + (txn.reimbursable ? 0 : Math.abs(txn.amount)), 0);
   const uobDetail = currentCard === 'UOB_LADYS'
     ? TransactionCalculator.calculateUobEligibleSpend(filteredTransactions, userElections[currentCard] || null)
+    : null;
+  const hsbcDetail = currentCard === 'HSBC_REVOLUTION'
+    ? TransactionCalculator.calculateHsbcEligibleSpend(filteredTransactions)
     : null;
 
   return (
@@ -309,7 +349,7 @@ export const Dashboard: React.FC = () => {
         <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
           <div className="text-sm font-medium text-gray-500 mb-1">{t(language, 'mpd_cap_remaining')}</div>
           <div className="text-2xl font-bold text-green-600">
-            ${Math.max(0, cardConfig.totalCap - stats.totalSpent).toFixed(2)}
+            ${Math.max(0, currentCardCap - stats.totalSpent).toFixed(2)}
           </div>
         </div>
       </div>
@@ -318,16 +358,50 @@ export const Dashboard: React.FC = () => {
           <div className="text-sm font-semibold text-gray-700 mb-2">{t(language, 'uob_category_cap_detail')}</div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
             {Object.keys(uobDetail.categorySpent).map(cat => {
-              const used = uobDetail.categorySpent[cat] || 0;
-              const rem = uobDetail.categoryRemaining?.[cat] || 0;
+              const actualUsed = filteredTransactions.reduce((acc, txn) => {
+                const eligibility = CardBenefitManager.isTransactionEligible(txn, 'UOB_LADYS', userElections[currentCard] || null);
+                if (eligibility.eligible && eligibility.matchedCategory === cat) {
+                  return acc + Math.abs(txn.amount);
+                }
+                return acc;
+              }, 0);
+              const bonusUsed = uobDetail.categorySpent[cat] || 0;
+              const rem = uobDetail.perCategoryCap - actualUsed;
+              const exceeded = actualUsed > uobDetail.perCategoryCap;
               const localizedCat = cat === 'Dining' ? t(language, 'dining') : cat === 'Travel' ? t(language, 'travel') : cat;
               return (
-                <div key={cat} className="flex justify-between bg-gray-50 rounded px-3 py-2">
+                <div key={cat} className={exceeded ? 'flex justify-between bg-red-50 rounded px-3 py-2 border border-red-100' : 'flex justify-between bg-gray-50 rounded px-3 py-2'}>
                   <span className="text-gray-600">{localizedCat}</span>
-                  <span className="font-semibold text-gray-900">${used.toFixed(2)} / ${uobDetail.perCategoryCap} ({t(language, 'balance_short')} ${rem.toFixed(2)})</span>
+                  <span className={exceeded ? 'font-semibold text-red-600' : 'font-semibold text-gray-900'}>
+                    ${actualUsed.toFixed(2)} / ${uobDetail.perCategoryCap} ({t(language, 'balance_short')} {rem < 0 ? '-' : ''}${Math.abs(rem).toFixed(2)})
+                    {exceeded ? `, +$${(actualUsed - uobDetail.perCategoryCap).toFixed(2)} over` : ''}
+                    {actualUsed !== bonusUsed ? `, 4 mpd tracked $${bonusUsed.toFixed(2)}` : ''}
+                  </span>
                 </div>
               );
             })}
+          </div>
+        </div>
+      )}
+      {hsbcDetail && (
+        <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 mb-8">
+          <div className="text-sm font-semibold text-gray-700 mb-2">HSBC matched categories</div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
+            {Object.entries(hsbcDetail.categorySpent)
+              .filter(([, used]) => used > 0)
+              .sort((a, b) => b[1] - a[1])
+              .map(([cat, used]) => {
+                const localizedCat = cat === 'Dining' ? t(language, 'dining') : cat === 'Travel' ? t(language, 'travel') : cat;
+                return (
+                  <div key={cat} className="flex justify-between bg-gray-50 rounded px-3 py-2">
+                    <span className="text-gray-600">{localizedCat}</span>
+                    <span className="font-semibold text-gray-900">${used.toFixed(2)} matched</span>
+                  </div>
+                );
+              })}
+          </div>
+          <div className="mt-2 text-xs text-gray-500">
+            Shared cap remaining: ${hsbcDetail.aggregateRemaining.toFixed(2)} / ${hsbcDetail.aggregateCap}
           </div>
         </div>
       )}
@@ -350,6 +424,7 @@ export const Dashboard: React.FC = () => {
           userElections={userElections[currentCard]}
           onCategoryChange={handleCategoryChange}
           onReimbursableChange={handleReimbursableChange}
+          onHsbcContactlessOptOutChange={handleHsbcContactlessOptOutChange}
           language={language}
         />
       </div>

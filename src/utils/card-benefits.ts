@@ -5,9 +5,9 @@ export const CARD_BENEFITS: Record<string, CardConfig> = {
     id: 'DBS_WWMC',
     name: 'DBS Woman\'s World Card',
     totalCap: 1000,
-    icon: '💳',
+    icon: 'DBS',
     requiresElection: false,
-    sharedCap: false, // Individual caps per category as per latest update
+    sharedCap: false,
     categories: {
       'Online Spending': {
         cap: 1000,
@@ -44,7 +44,7 @@ export const CARD_BENEFITS: Record<string, CardConfig> = {
     id: 'UOB_LADYS',
     name: 'UOB Lady\'s Solitaire Card',
     totalCap: 1500,
-    icon: '💳',
+    icon: 'UOB',
     requiresElection: true,
     maxElectable: 2,
     sharedCap: true,
@@ -72,10 +72,48 @@ export const CARD_BENEFITS: Record<string, CardConfig> = {
     },
     fallbackMPD: 0.4,
     description: '4 mpd on 2 selected categories, S$1,500 monthly aggregate cap and S$750 per selected category cap'
+  },
+  'HSBC_REVOLUTION': {
+    id: 'HSBC_REVOLUTION',
+    name: 'HSBC Revolution Credit Card',
+    totalCap: 1000,
+    icon: 'HSBC',
+    requiresElection: false,
+    sharedCap: true,
+    categories: {
+      'Online Spending': {
+        cap: 1000,
+        mpd: 4,
+        autoEligible: true,
+        categoryNames: ['Dining', 'Travel', 'Transport', 'Shopping', 'Fashion', 'Entertainment', 'Memberships'],
+        requiredPaymentTypes: ['ONLINE', 'IN-APP']
+      },
+      'Contactless Promo': {
+        cap: 1000,
+        mpd: 4,
+        autoEligible: true,
+        categoryNames: ['Dining', 'Travel', 'Transport', 'Shopping', 'Fashion', 'Entertainment', 'Memberships'],
+        requiredPaymentTypes: ['CONTACTLESS']
+      }
+    },
+    fallbackMPD: 0.4,
+    description: '4 mpd equivalent on eligible online spend, with online travel/contactless promo to 31 Mar 2026'
   }
 };
 
 export class CardBenefitManager {
+  static isHsbcContactlessPromoActive(asOf: Date = new Date()): boolean {
+    const promoEnd = new Date('2026-04-01T00:00:00+08:00');
+    return asOf.getTime() < promoEnd.getTime();
+  }
+
+  static getCardTotalCap(cardId: string, asOf: Date = new Date()): number {
+    if (cardId === 'HSBC_REVOLUTION') {
+      return this.isHsbcContactlessPromoActive(asOf) ? 1500 : 1000;
+    }
+    return CARD_BENEFITS[cardId]?.totalCap ?? 0;
+  }
+
   static getEffectiveUserElections(cardId: string, userElections: string[] | null = null): string[] | null {
     if (userElections && userElections.length > 0) return userElections;
     if (cardId === 'UOB_LADYS') return ['Dining', 'Travel'];
@@ -85,6 +123,7 @@ export class CardBenefitManager {
   static normalizeTransactionCardId(transaction: Transaction): string {
     if (transaction.cardId) return transaction.cardId;
     if ((transaction.source || '').toUpperCase() === 'UOB') return 'UOB_LADYS';
+    if ((transaction.source || '').toUpperCase() === 'HSBC') return 'HSBC_REVOLUTION';
     return 'DBS_WWMC';
   }
 
@@ -112,11 +151,13 @@ export class CardBenefitManager {
     const merchant = (transaction.merchant || '').toUpperCase();
     const category = (transaction.category || '').toUpperCase();
     const paymentType = (transaction.paymentType || '').toUpperCase();
+    const transactionDate = new Date(transaction.date);
+    const hsbcPromoActiveForTransaction = !Number.isNaN(transactionDate.getTime())
+      ? this.isHsbcContactlessPromoActive(transactionDate)
+      : this.isHsbcContactlessPromoActive();
 
-    // Check fixed categories
     const categoriesToCheck = { ...card.categories };
-    
-    // Add user elected categories if applicable
+
     if (card.requiresElection && effectiveElections && card.electableCategories) {
       effectiveElections.forEach(catName => {
         if (card.electableCategories?.[catName]) {
@@ -126,29 +167,38 @@ export class CardBenefitManager {
     }
 
     for (const [catName, catConfig] of Object.entries(categoriesToCheck)) {
-      let isMatch = false;
+      if (cardId === 'HSBC_REVOLUTION' && catName === 'Contactless Promo' && !hsbcPromoActiveForTransaction) {
+        continue;
+      }
 
-      // 1. Check if transaction category matches benefit category name
+      let isMatch = false;
+      const categoryNames = (catConfig.categoryNames || []).map(name => name.toUpperCase());
+      const requiredPaymentTypes = (catConfig.requiredPaymentTypes || []).map(type => type.toUpperCase());
+
       if (category === catName.toUpperCase()) {
         isMatch = true;
       }
 
-      // 2. Check merchant keywords
+      if (!isMatch && categoryNames.length > 0) {
+        isMatch = categoryNames.includes(category);
+      }
+
       if (!isMatch && catConfig.keywords && catConfig.keywords.length > 0) {
         isMatch = catConfig.keywords.some(kw => merchant.includes(kw.toUpperCase()));
       }
 
-      // 3. Check category keywords
       if (!isMatch && catConfig.categoryKeywords) {
         isMatch = catConfig.categoryKeywords.some(kw => category.includes(kw.toUpperCase()));
       }
 
-      // 4. Check payment type
       if (!isMatch && catConfig.paymentTypes && paymentType) {
         isMatch = catConfig.paymentTypes.some(pt => paymentType.includes(pt.toUpperCase()));
       }
 
-      // 5. Exclusion filter (for cards/categories with explicit bank exclusions)
+      if (isMatch && requiredPaymentTypes.length > 0) {
+        isMatch = requiredPaymentTypes.some(pt => paymentType.includes(pt));
+      }
+
       if (isMatch && catConfig.excludedKeywords && catConfig.excludedKeywords.length > 0) {
         const isExcluded = catConfig.excludedKeywords.some(kw => merchant.includes(kw.toUpperCase()));
         if (isExcluded) isMatch = false;
@@ -173,8 +223,7 @@ export class CardBenefitManager {
     const effectiveElections = this.getEffectiveUserElections(cardId, userElections);
 
     const spending: Record<string, { spent: number; cap: number; remaining: number; mpd: number }> = {};
-    
-    // Initialize categories
+
     const relevantCategories = { ...card.categories };
     if (card.requiresElection && effectiveElections && card.electableCategories) {
       effectiveElections.forEach(catName => {
@@ -185,16 +234,18 @@ export class CardBenefitManager {
     }
 
     Object.entries(relevantCategories).forEach(([name, config]) => {
-      spending[name] = { spent: 0, cap: config.cap, remaining: config.cap, mpd: config.mpd };
+      const effectiveCap = cardId === 'HSBC_REVOLUTION'
+        ? this.getCardTotalCap(cardId)
+        : config.cap;
+      spending[name] = { spent: 0, cap: effectiveCap, remaining: effectiveCap, mpd: config.mpd };
     });
 
-    // Add fallback category
     spending['Others'] = { spent: 0, cap: Infinity, remaining: Infinity, mpd: card.fallbackMPD };
 
     scopedTransactions.forEach(t => {
       const amount = Math.abs(t.amount);
       const eligibility = this.isTransactionEligible(t, cardId, effectiveElections);
-      
+
       if (eligibility.eligible && eligibility.matchedCategory) {
         spending[eligibility.matchedCategory].spent += amount;
       } else {
@@ -202,11 +253,9 @@ export class CardBenefitManager {
       }
     });
 
-    // Update remaining and respect caps
     Object.keys(spending).forEach(name => {
       if (card.sharedCap) {
         // Shared caps are handled differently in UI/summary usually
-        // but for per-category specifically if sharedCap=true, we might show total cap
       }
       spending[name].remaining = Math.max(0, spending[name].cap - spending[name].spent);
     });

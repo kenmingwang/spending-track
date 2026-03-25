@@ -1,7 +1,108 @@
 import { CardBenefitManager } from './card-benefits';
 import { Transaction } from '../types';
+import { normalizeCategory } from './category-overrides';
 
 export class TransactionCalculator {
+  static readonly HSBC_TRACKED_CATEGORIES = [
+    'Dining',
+    'Travel',
+    'Transport',
+    'Shopping',
+    'Fashion',
+    'Entertainment',
+    'Memberships'
+  ] as const;
+
+  static calculateRewardOutcome(
+    transaction: Transaction,
+    cardId: string,
+    userElections: string[] | null = null
+  ) {
+    const card = CardBenefitManager.getCardConfig(cardId);
+    const baseMpd = card?.fallbackMPD ?? 0.4;
+    const eligibility = CardBenefitManager.isTransactionEligible(transaction, cardId, userElections);
+    const totalMpd = eligibility.eligible ? eligibility.mpd : baseMpd;
+    const amount = Math.abs(transaction.amount);
+
+    if (cardId === 'DBS_WWMC') {
+      const basePoints = Math.floor(amount / 5);
+      if (totalMpd <= baseMpd) {
+        return { points: basePoints, miles: basePoints * 2 };
+      }
+      const totalMultiplier = totalMpd / baseMpd;
+      const bonusMultiplier = Math.max(0, totalMultiplier - 1);
+      const bonusPoints = Math.floor((amount / 5) * bonusMultiplier);
+      const totalPoints = basePoints + bonusPoints;
+      return { points: totalPoints, miles: totalPoints * 2 };
+    }
+
+    if (cardId === 'UOB_LADYS') {
+      const blockSpend = Math.floor(amount / 5) * 5;
+      return { points: blockSpend, miles: Math.round(blockSpend * totalMpd) };
+    }
+
+    if (cardId === 'HSBC_REVOLUTION') {
+      const roundedSpend = Math.floor(amount);
+      const rewardRate = Math.round(totalMpd / 0.4);
+      const points = roundedSpend * rewardRate;
+      return { points, miles: Math.round(roundedSpend * totalMpd) };
+    }
+
+    return {
+      points: Math.round(amount * totalMpd),
+      miles: Math.round(amount * totalMpd),
+    };
+  }
+
+  static calculateHsbcEligibleSpend(transactions: Transaction[]) {
+    const trackedCategories = [...this.HSBC_TRACKED_CATEGORIES];
+    const latestTransactionDate = transactions.reduce<Date | null>((latest, transaction) => {
+      const parsed = new Date(transaction.date);
+      if (Number.isNaN(parsed.getTime())) return latest;
+      if (!latest || parsed.getTime() > latest.getTime()) return parsed;
+      return latest;
+    }, null);
+    const aggregateCap = CardBenefitManager.getCardTotalCap('HSBC_REVOLUTION', latestTransactionDate || new Date());
+    const categorySpent = Object.fromEntries(
+      trackedCategories.map((category) => [category, 0])
+    ) as Record<string, number>;
+
+    let aggregateUsed = 0;
+    let eligibleSpend = 0;
+    let expectedMiles = 0;
+
+    transactions.forEach((transaction) => {
+      const amount = Math.abs(transaction.amount);
+      const canonicalCategory = normalizeCategory(transaction.category || 'Uncategorized');
+      const matchedCategory = trackedCategories.includes(canonicalCategory as typeof trackedCategories[number])
+        ? canonicalCategory
+        : null;
+      const eligibility = CardBenefitManager.isTransactionEligible(transaction, 'HSBC_REVOLUTION', null);
+      const aggregateRemaining = Math.max(0, aggregateCap - aggregateUsed);
+      const bonusEligibleAmount = eligibility.eligible && matchedCategory
+        ? Math.min(amount, aggregateRemaining)
+        : 0;
+      const baseAmount = Math.max(0, amount - bonusEligibleAmount);
+
+      if (matchedCategory && bonusEligibleAmount > 0) {
+        categorySpent[matchedCategory] += bonusEligibleAmount;
+        aggregateUsed += bonusEligibleAmount;
+        eligibleSpend += bonusEligibleAmount;
+      }
+
+      expectedMiles += (bonusEligibleAmount * 4) + (baseAmount * 0.4);
+    });
+
+    return {
+      eligibleSpend,
+      aggregateUsed,
+      aggregateRemaining: Math.max(0, aggregateCap - aggregateUsed),
+      aggregateCap,
+      categorySpent,
+      expectedMiles: Math.round(expectedMiles),
+    };
+  }
+
   static calculateUobEligibleSpend(
     transactions: Transaction[],
     userElections: string[] | null = null
@@ -118,6 +219,10 @@ export class TransactionCalculator {
       const uob = this.calculateUobEligibleSpend(scopedTransactions, effectiveElections);
       totalSpent = uob.eligibleSpend;
       expectedMiles = uob.expectedMiles;
+    } else if (cardId === 'HSBC_REVOLUTION') {
+      const hsbc = this.calculateHsbcEligibleSpend(scopedTransactions);
+      totalSpent = hsbc.eligibleSpend;
+      expectedMiles = hsbc.expectedMiles;
     } else {
       Object.values(cardSpending).forEach(data => {
         totalSpent += data.spent;

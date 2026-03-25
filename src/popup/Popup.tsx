@@ -1,67 +1,111 @@
 import React, { useState, useEffect } from 'react';
+import { Play, Square, ExternalLink, RefreshCw, CreditCard } from 'lucide-react';
 import { useScanner } from './useScanner';
 import { CardBenefitManager } from '../utils/card-benefits';
 import { TransactionCalculator } from '../utils/calculator';
 import { Transaction } from '../types';
-import { Play, Square, ExternalLink, RefreshCw } from 'lucide-react';
 import { getCardDisplayName } from '../utils/i18n';
 import { useLanguage } from '../utils/useLanguage';
+import { enrichHsbcTransactionInference } from '../utils/merchant-category';
+
+type PopupCardStat = {
+  id: string;
+  icon: string;
+  totalCap: number;
+  displayName: string;
+  spent: number;
+  miles: number;
+  uobDetail: ReturnType<typeof TransactionCalculator.calculateUobEligibleSpend> | null;
+  hsbcDetail: ReturnType<typeof TransactionCalculator.calculateHsbcEligibleSpend> | null;
+  lastUpdatedAt: string | null;
+};
 
 export const Popup: React.FC = () => {
   const { language, setLanguage, t } = useLanguage();
   const { isScanning, progress, status, startScan, stopScan } = useScanner(language);
-  const [cardStats, setCardStats] = useState<any[]>([]);
+  const [cardStats, setCardStats] = useState<PopupCardStat[]>([]);
   const [uobRewards, setUobRewards] = useState<Array<{ label: string; value: number }>>([]);
 
   useEffect(() => {
-    loadStats();
+    void loadStats();
   }, [isScanning, language]);
 
   const loadStats = async () => {
-    const data = await chrome.storage.local.get(['transactions', 'uobRewards', 'cardConfigs']) as {
+    const data = await chrome.storage.local.get(['transactions', 'uobRewards', 'cardConfigs', 'cardLastUpdated']) as {
       transactions?: Transaction[];
       uobRewards?: Array<{ label: string; value: number }>;
       cardConfigs?: Record<string, string[]>;
+      cardLastUpdated?: Record<string, string>;
     };
-    const txns = data.transactions || [];
+
+    const rawTransactions = data.transactions || [];
+    const transactions = rawTransactions.map(enrichHsbcTransactionInference);
+    const lastUpdated = data.cardLastUpdated || {};
+    const now = new Date();
+    const hasBackfilledTransactions = transactions.some((txn, index) => (
+      txn.category !== rawTransactions[index]?.category ||
+      txn.paymentType !== rawTransactions[index]?.paymentType
+    ));
+
     setUobRewards(data.uobRewards || []);
 
-    const stats = CardBenefitManager.getAllCards().map(card => {
-      const calculated = TransactionCalculator.calculateStats(txns, card.id);
+    const stats = CardBenefitManager.getAllCards().map((card) => {
+      const monthlyTransactions = CardBenefitManager
+        .filterTransactionsForCard(transactions, card.id)
+        .filter((txn) => {
+          const date = new Date(txn.date);
+          return !Number.isNaN(date.getTime()) && date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth();
+        });
+
+      const calculated = TransactionCalculator.calculateStats(monthlyTransactions, card.id);
       const uobDetail = card.id === 'UOB_LADYS'
-        ? TransactionCalculator.calculateUobEligibleSpend(
-            CardBenefitManager.filterTransactionsForCard(txns, card.id),
-            data.cardConfigs?.[card.id] || null
-          )
+        ? TransactionCalculator.calculateUobEligibleSpend(monthlyTransactions, data.cardConfigs?.[card.id] || null)
         : null;
+      const hsbcDetail = card.id === 'HSBC_REVOLUTION'
+        ? TransactionCalculator.calculateHsbcEligibleSpend(monthlyTransactions)
+        : null;
+
       return {
-        ...card,
+        id: card.id,
+        icon: card.icon,
+        totalCap: CardBenefitManager.getCardTotalCap(card.id),
         displayName: getCardDisplayName(card.id, language, card.name),
         spent: calculated.totalSpent,
         miles: calculated.expectedMiles,
-        uobDetail
+        uobDetail,
+        hsbcDetail,
+        lastUpdatedAt: lastUpdated[card.id] || null,
       };
     });
+
     setCardStats(stats);
+
+    if (hasBackfilledTransactions) {
+      await chrome.storage.local.set({ transactions });
+    }
   };
 
   const openDashboard = () => chrome.tabs.create({ url: 'dashboard/dashboard.html' });
-  const openUobBanking = () => chrome.tabs.create({ url: 'https://pib.uob.com.sg/PIBLogin/public/processPreCapture.do' });
+  const openUobBanking = () => chrome.tabs.create({ url: 'https://pib.uob.com.sg/PIBLogin/Public/processPreCapture.do?keyId=lpc' });
   const openDbsBanking = () => chrome.tabs.create({ url: 'https://internet-banking.dbs.com.sg/IB/Welcome' });
 
   const resetData = async () => {
-    const message = language === 'zh' ? '确认清空所有数据吗？' : 'Are you sure you want to clear all data?';
-    if (confirm(message)) {
-      await chrome.storage.local.clear();
-      loadStats();
-    }
+    const message = language === 'zh'
+      ? '\u786e\u8ba4\u6e05\u7a7a\u6240\u6709\u6570\u636e\u5417\uff1f'
+      : 'Are you sure you want to clear all data?';
+    if (!confirm(message)) return;
+    await chrome.storage.local.clear();
+    await loadStats();
   };
+
+  const locale = language === 'zh' ? 'zh-CN' : 'en-SG';
 
   return (
     <div className="w-[350px] bg-white text-gray-900 font-sans p-4 shadow-xl">
       <header className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-bold flex items-center gap-2">
-          <span className="text-blue-600">馃捀</span> {t('app_name')}
+          <CreditCard size={20} className="text-blue-600" />
+          {t('app_name')}
         </h1>
         <div className="flex items-center gap-1.5">
           <button
@@ -82,7 +126,7 @@ export const Popup: React.FC = () => {
       </header>
 
       <div className="space-y-3 mb-6">
-        {cardStats.map(card => (
+        {cardStats.map((card) => (
           <div key={card.id} className="bg-gray-50 rounded-xl p-3 border border-gray-100">
             <div className="flex items-center gap-3 mb-2">
               <span className="text-xl">{card.icon}</span>
@@ -91,25 +135,33 @@ export const Popup: React.FC = () => {
                 <div className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">
                   {t('remaining')}: ${Math.max(0, card.totalCap - card.spent).toFixed(2)}
                 </div>
+                {card.lastUpdatedAt && (
+                  <div className="text-[10px] text-gray-400">
+                    {t('last_updated')}: {new Date(card.lastUpdatedAt).toLocaleDateString(locale)}
+                  </div>
+                )}
               </div>
               <div className="text-right">
                 <div className="text-xs font-bold text-blue-600">{card.miles} {t('miles_label')}</div>
               </div>
             </div>
+
             <div className="w-full bg-gray-200 rounded-full h-1">
               <div
                 className="bg-blue-600 h-full rounded-full transition-all duration-500"
                 style={{ width: `${Math.min(100, (card.spent / card.totalCap) * 100)}%` }}
               />
             </div>
+
             {card.id === 'UOB_LADYS' && card.uobDetail && (
               <div className="mt-2 space-y-1">
                 {[t('dining'), t('travel')].map((label, index) => {
                   const sourceKey = index === 0 ? 'Dining' : 'Travel';
-                  const used = Number(card.uobDetail.categorySpent?.[sourceKey] || 0);
-                  const cap = Number(card.uobDetail.perCategoryCap || 750);
+                  const used = Number(card.uobDetail?.categorySpent?.[sourceKey] || 0);
+                  const cap = Number(card.uobDetail?.perCategoryCap || 750);
                   const remaining = Math.max(0, cap - used);
                   const pct = Math.min(100, cap > 0 ? (used / cap) * 100 : 0);
+
                   return (
                     <div key={sourceKey} className="text-[10px] text-gray-500">
                       <div className="flex justify-between">
@@ -126,6 +178,33 @@ export const Popup: React.FC = () => {
                     </div>
                   );
                 })}
+              </div>
+            )}
+            {card.id === 'HSBC_REVOLUTION' && card.hsbcDetail && (
+              <div className="mt-2 space-y-1">
+                {Object.entries(card.hsbcDetail.categorySpent)
+                  .filter(([, used]) => used > 0)
+                  .sort((a, b) => b[1] - a[1])
+                  .slice(0, 3)
+                  .map(([category, used]) => {
+                    const localizedCategory = category === 'Dining' ? t('dining') : category === 'Travel' ? t('travel') : category;
+                    const pct = Math.min(100, card.hsbcDetail!.aggregateCap > 0 ? (used / card.hsbcDetail!.aggregateCap) * 100 : 0);
+
+                    return (
+                      <div key={category} className="text-[10px] text-gray-500">
+                        <div className="flex justify-between">
+                          <span>{localizedCategory}</span>
+                          <span>${used.toFixed(0)} matched</span>
+                        </div>
+                        <div className="w-full bg-gray-200 rounded-full h-1 mt-0.5">
+                          <div
+                            className="h-full rounded-full transition-all duration-500 bg-red-500"
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
               </div>
             )}
           </div>
@@ -189,6 +268,7 @@ export const Popup: React.FC = () => {
         </button>
         <div className="font-medium">Version 1.0.0</div>
       </div>
+
       <div className="mt-3 bg-gray-50 border border-gray-100 rounded-lg p-2.5">
         <div className="text-[10px] font-semibold text-gray-600 mb-2">{t('weekly_update_reminder')}</div>
         <div className="flex gap-2 mb-1.5">

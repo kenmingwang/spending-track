@@ -21,6 +21,8 @@ const CATEGORY_CANONICAL_MAP: Record<string, string> = {
   'TRANSPORTATION': 'Transport',
   'TRANSIT': 'Transport',
   'PUBLIC TRANSPORT': 'Transport',
+  'MEMBERSHIP': 'Memberships',
+  'MEMBERSHIPS': 'Memberships',
   'GROCERY': 'Groceries',
   'GROCERIES': 'Groceries',
   'GROCERY SHOPPING': 'Groceries',

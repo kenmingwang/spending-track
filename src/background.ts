@@ -16,10 +16,14 @@ const notifyWeeklyReminder = async () => {
   const language = await getStoredLanguage();
   chrome.notifications.create({
     type: 'basic',
-    iconUrl: 'images/icon48.png',
+    iconUrl: chrome.runtime.getURL('images/icon48.png'),
     title: t(language, 'notif_title'),
     message: t(language, 'notif_message'),
     priority: 1,
+  }, () => {
+    if (chrome.runtime.lastError) {
+      console.error('Failed to create weekly reminder notification:', chrome.runtime.lastError.message);
+    }
   });
 };
 

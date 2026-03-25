@@ -1,3 +1,5 @@
+import { inferHsbcCategoryFromMerchant, inferHsbcPaymentTypeFromMerchant } from '../utils/merchant-category';
+
 // extractor.ts - Restored robust logic from previous working JS version
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const normalizeText = (text: string) =>
@@ -110,6 +112,101 @@ const isUobPage = (): boolean => {
     if (host.includes('uob')) return true;
     const bodyText = (document.body?.innerText || '').toLowerCase();
     return bodyText.includes('uni$') || bodyText.includes('rewards points');
+};
+
+const isHsbcPage = (): boolean => {
+    const host = window.location.hostname.toLowerCase();
+    if (host.includes('hsbc')) return true;
+    return Boolean(
+        document.querySelector('#rtrvTransactionHistoryUrl') ||
+        document.querySelector('main-dashboard') ||
+        document.querySelector('#account-summary-name')
+    );
+};
+
+const parseHsbcDate = (value: string): Date | null => {
+    const text = value.replace(/\s+/g, ' ').trim();
+    if (!text) return null;
+    const m = text.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (!m) return null;
+    const parsed = new Date(`${m[3]}-${m[2]}-${m[1]}T00:00:00+08:00`);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const getHsbcSelectedAccountName = (): string => {
+    return getText(document.querySelector('#account-summary-name')) ||
+        getText(document.querySelector('#account-container-1 .account-title')) ||
+        getText(document.querySelector('.account-summary-title-detail .account-title'));
+};
+
+const getHsbcSelectedSectionText = (): string => {
+    return getText(document.querySelector('.cc-tab-group .cc-tab-selected')) ||
+        getText(document.querySelector('.cc-tabs-dropdown .select-target')) ||
+        'Transactions';
+};
+
+const extractHsbcTransactions = async () => {
+    const accountName = getHsbcSelectedAccountName();
+    if (!/REVOLUTION/i.test(accountName)) {
+        return {
+            transactions: [],
+            scannedRows: 0,
+            section: getHsbcSelectedSectionText(),
+            error: `Selected HSBC account is "${accountName || 'Unknown'}", not Revolution Visa.`
+        };
+    }
+
+    const rows = Array.from(document.querySelectorAll('table.desktop-table tr.description-table-row'));
+    const transactions: any[] = [];
+    const sectionText = getHsbcSelectedSectionText();
+
+    for (let i = 0; i < rows.length; i++) {
+        if (stopRequested) break;
+
+        chrome.runtime.sendMessage({
+            action: "scan_progress",
+            current: i + 1,
+            total: rows.length
+        });
+
+        const row = rows[i] as HTMLElement;
+        const dateText = getText(row.querySelector('date-display div, .table-row-column1'));
+        const merchantText = getText(row.querySelector('.table-row-column2 span, .table-row-column2 p, #transaction-description-preview-0'));
+        const amountOutText = getText(row.querySelector('.table-row-column4 p, .table-row-column4'));
+        const amountInText = getText(row.querySelector('.table-row-column3 p, .table-row-column3'));
+
+        const parsedDate = parseHsbcDate(dateText);
+        if (!parsedDate || !merchantText) continue;
+
+        const amountOut = parseNumericValue(amountOutText);
+        const amountIn = parseNumericValue(amountInText);
+
+        if (amountIn !== null && amountIn > 0 && (amountOut === null || amountOut <= 0)) {
+            continue;
+        }
+        if (amountOut === null || amountOut <= 0) continue;
+
+        const merchant = merchantText.replace(/\s+/g, ' ').trim();
+
+        transactions.push({
+            date: parsedDate.toISOString(),
+            merchant: merchant || 'Unknown Merchant',
+            amount: -Math.abs(amountOut),
+            category: inferHsbcCategoryFromMerchant(merchant),
+            cardId: 'HSBC_REVOLUTION',
+            source: 'HSBC',
+            uobSection: sectionText,
+            paymentType: inferHsbcPaymentTypeFromMerchant(merchant),
+            transactionType: 'PURCHASE',
+            originalIndex: i
+        });
+    }
+
+    return {
+        transactions,
+        scannedRows: rows.length,
+        section: sectionText
+    };
 };
 
 const extractUobRewards = () => {
@@ -385,6 +482,18 @@ async function runExtraction(sendResponse: (response: any) => void) {
                 error: rewards.length === 0
                     ? 'No UOB transactions found on this page. Open Statement Details with transaction rows and try again.'
                     : undefined
+            });
+            return;
+        }
+
+        if (isHsbcPage()) {
+            const { transactions, section, error } = await extractHsbcTransactions();
+            sendResponse({
+                source: 'HSBC',
+                transactions,
+                section,
+                cancelled: stopRequested,
+                error: error || (transactions.length === 0 ? 'No HSBC transactions found on this page. Open the Revolution card transaction table and try again.' : undefined)
             });
             return;
         }

@@ -5,7 +5,9 @@ export interface CategoryConfig {
   keywords?: string[];
   excludedKeywords?: string[];
   categoryKeywords?: string[];
+  categoryNames?: string[];
   paymentTypes?: string[];
+  requiredPaymentTypes?: string[];
 }
 
 export interface CardConfig {
@@ -33,5 +35,6 @@ export interface Transaction {
   uobSection?: string;
   transactionType?: string;
   paymentType?: string;
+  hsbcContactlessOptOut?: boolean;
   originalIndex?: number;
 }

@@ -7,6 +7,7 @@ import {
   updateOverridesForMerchant,
   type CategoryOverrides
 } from '../utils/category-overrides';
+import { enrichHsbcTransactionInference } from '../utils/merchant-category';
 
 export interface ScanProgress {
   current: number;
@@ -178,7 +179,9 @@ export const useScanner = (language: Language = 'en') => {
       if (response?.transactions) {
         const normalizedCardId = (tx: any) => {
           if (tx?.cardId) return tx.cardId;
-          return (tx?.source || '').toUpperCase() === 'UOB' ? 'UOB_LADYS' : 'DBS_WWMC';
+          if ((tx?.source || '').toUpperCase() === 'UOB') return 'UOB_LADYS';
+          if ((tx?.source || '').toUpperCase() === 'HSBC') return 'HSBC_REVOLUTION';
+          return 'DBS_WWMC';
         };
 
         const batchSeen = new Set<string>();
@@ -190,12 +193,14 @@ export const useScanner = (language: Language = 'en') => {
         });
 
         // Handle deduplication and saving
-        const data = await chrome.storage.local.get(['transactions', 'categoryOverrides']) as { 
+        const data = await chrome.storage.local.get(['transactions', 'categoryOverrides', 'cardLastUpdated']) as { 
           transactions?: Transaction[];
           categoryOverrides?: CategoryOverrides;
+          cardLastUpdated?: Record<string, string>;
         };
         const existingTxns = data.transactions || [];
         const overrides = data.categoryOverrides || {};
+        const cardLastUpdated = data.cardLastUpdated || {};
         
         // Simple deduplication logic
         const newTxns = dedupedBatchTxns.filter((nt: any) => 
@@ -218,17 +223,22 @@ export const useScanner = (language: Language = 'en') => {
         // 2) Infer category for newly scanned rows from card rules when category is missing
         const inferredTxns = newTxns.map((tx: any) => {
           const currentCategory = (tx.category || '').trim() || 'Uncategorized';
-          if (!/^uncategorized$/i.test(currentCategory)) return tx;
           const cardId = normalizedCardId(tx);
+          let nextTx = cardId === 'HSBC_REVOLUTION'
+            ? enrichHsbcTransactionInference(tx as Transaction)
+            : { ...tx };
+
+          if (!/^uncategorized$/i.test((nextTx.category || '').trim() || 'Uncategorized')) return nextTx;
+
           const eligibility = CardBenefitManager.isTransactionEligible(
-            { ...tx, category: currentCategory } as Transaction,
+            { ...nextTx, category: (nextTx.category || currentCategory) } as Transaction,
             cardId,
             null
           );
           if (eligibility.eligible && eligibility.matchedCategory) {
-            return { ...tx, category: eligibility.matchedCategory };
+            return { ...nextTx, category: eligibility.matchedCategory };
           }
-          return tx;
+          return nextTx;
         });
 
         // 3) Apply learned overrides as hit cache
@@ -241,9 +251,20 @@ export const useScanner = (language: Language = 'en') => {
           learnedOverrides = updateOverridesForMerchant(learnedOverrides, tx.merchant, cat);
         });
 
+        const touchedCards = new Set<string>();
+        dedupedBatchTxns.forEach((tx: any) => touchedCards.add(normalizedCardId(tx)));
+        if (touchedCards.size === 0) {
+          touchedCards.add(isLikelyUobTab ? 'UOB_LADYS' : 'DBS_WWMC');
+        }
+        const nowIso = new Date().toISOString();
+        touchedCards.forEach(cardId => {
+          cardLastUpdated[cardId] = nowIso;
+        });
+
         await chrome.storage.local.set({ 
           transactions: [...existingTxns, ...newTxnsWithOverrides],
-          categoryOverrides: learnedOverrides
+          categoryOverrides: learnedOverrides,
+          cardLastUpdated
         });
 
         if (response?.source === 'UOB') {
