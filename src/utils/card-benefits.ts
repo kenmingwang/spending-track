@@ -1,4 +1,7 @@
 import { CategoryConfig, CardConfig, Transaction } from '../types';
+import dbsWomansWorldCard from '../../images/cards/dbs-womans-world-card.png';
+import uobLadysSolitaireCard from '../../images/cards/uob-ladys-solitaire-card.png';
+import hsbcRevolutionCard from '../../images/cards/hsbc-revolution-card.jpg';
 
 export const CARD_BENEFITS: Record<string, CardConfig> = {
   'DBS_WWMC': {
@@ -6,6 +9,7 @@ export const CARD_BENEFITS: Record<string, CardConfig> = {
     name: 'DBS Woman\'s World Card',
     totalCap: 1000,
     icon: 'DBS',
+    coverImage: dbsWomansWorldCard,
     requiresElection: false,
     sharedCap: false,
     categories: {
@@ -45,6 +49,7 @@ export const CARD_BENEFITS: Record<string, CardConfig> = {
     name: 'UOB Lady\'s Solitaire Card',
     totalCap: 1500,
     icon: 'UOB',
+    coverImage: uobLadysSolitaireCard,
     requiresElection: true,
     maxElectable: 2,
     sharedCap: true,
@@ -78,6 +83,7 @@ export const CARD_BENEFITS: Record<string, CardConfig> = {
     name: 'HSBC Revolution Credit Card',
     totalCap: 1000,
     icon: 'HSBC',
+    coverImage: hsbcRevolutionCard,
     requiresElection: false,
     sharedCap: true,
     categories: {

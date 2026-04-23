@@ -2,6 +2,13 @@ import { CardBenefitManager } from './card-benefits';
 import { Transaction } from '../types';
 import { normalizeCategory } from './category-overrides';
 
+export interface RewardOutcome {
+  points: number;
+  miles: number;
+  trackedSpend: number;
+  trackedFourMpdSpend: number;
+}
+
 export class TransactionCalculator {
   static readonly HSBC_TRACKED_CATEGORIES = [
     'Dining',
@@ -12,6 +19,117 @@ export class TransactionCalculator {
     'Entertainment',
     'Memberships'
   ] as const;
+
+  private static sortTransactionsForCapProcessing(transactions: Transaction[]) {
+    return transactions
+      .map((transaction, index) => ({
+        transaction,
+        index,
+        time: Number.isNaN(new Date(transaction.date).getTime()) ? 0 : new Date(transaction.date).getTime(),
+        originalIndex: transaction.originalIndex ?? index,
+      }))
+      .sort((a, b) => a.time - b.time || a.originalIndex - b.originalIndex || a.index - b.index);
+  }
+
+  static calculateRewardOutcomes(
+    transactions: Transaction[],
+    cardId: string,
+    userElections: string[] | null = null
+  ) {
+    const outcomes = new Map<Transaction, RewardOutcome>();
+    const card = CardBenefitManager.getCardConfig(cardId);
+    const baseMpd = card?.fallbackMPD ?? 0.4;
+    const effectiveElections = CardBenefitManager.getEffectiveUserElections(cardId, userElections);
+    const orderedTransactions = this.sortTransactionsForCapProcessing(transactions);
+
+    if (cardId === 'DBS_WWMC') {
+      let remainingOnlineCap = CardBenefitManager.getCardTotalCap(cardId);
+
+      orderedTransactions.forEach(({ transaction }) => {
+        const amount = Math.abs(transaction.amount);
+        const eligibility = CardBenefitManager.isTransactionEligible(transaction, cardId, effectiveElections);
+        const totalMpd = eligibility.eligible ? eligibility.mpd : baseMpd;
+        const basePoints = Math.floor(amount / 5);
+        const bonusMultiplier = Math.max(0, (totalMpd / baseMpd) - 1);
+        const trackedSpend = eligibility.eligible && eligibility.mpd >= 4
+          ? Math.min(amount, remainingOnlineCap)
+          : eligibility.eligible && totalMpd > baseMpd
+            ? amount
+            : 0;
+        const trackedFourMpdSpend = eligibility.eligible && eligibility.mpd >= 4 ? trackedSpend : 0;
+
+        if (trackedFourMpdSpend > 0) {
+          remainingOnlineCap = Math.max(0, remainingOnlineCap - trackedFourMpdSpend);
+        }
+
+        const bonusPoints = Math.floor((trackedSpend / 5) * bonusMultiplier);
+        const totalPoints = basePoints + bonusPoints;
+        outcomes.set(transaction, {
+          points: totalPoints,
+          miles: totalPoints * 2,
+          trackedSpend,
+          trackedFourMpdSpend,
+        });
+      });
+
+      return outcomes;
+    }
+
+    if (cardId === 'UOB_LADYS') {
+      const perCategoryCap = 750;
+      const aggregateCap = 1500;
+      const categorySpent: Record<string, number> = {};
+      let aggregateUsed = 0;
+
+      orderedTransactions.forEach(({ transaction }) => {
+        const amount = Math.abs(transaction.amount);
+        const blockSpend = Math.floor(amount / 5) * 5;
+        const eligibility = CardBenefitManager.isTransactionEligible(transaction, cardId, effectiveElections);
+
+        if (!eligibility.eligible || !eligibility.matchedCategory) {
+          outcomes.set(transaction, {
+            points: blockSpend,
+            miles: Math.round(blockSpend * baseMpd),
+            trackedSpend: 0,
+            trackedFourMpdSpend: 0,
+          });
+          return;
+        }
+
+        const categoryName = eligibility.matchedCategory;
+        const categoryRemaining = Math.max(0, perCategoryCap - (categorySpent[categoryName] || 0));
+        const aggregateRemaining = Math.max(0, aggregateCap - aggregateUsed);
+        const trackedSpend = Math.min(amount, categoryRemaining, aggregateRemaining);
+        const trackedBlockSpend = Math.floor(trackedSpend / 5) * 5;
+        const baseBlockSpend = Math.max(0, blockSpend - trackedBlockSpend);
+
+        if (trackedSpend > 0) {
+          categorySpent[categoryName] = (categorySpent[categoryName] || 0) + trackedSpend;
+          aggregateUsed += trackedSpend;
+        }
+
+        outcomes.set(transaction, {
+          points: blockSpend,
+          miles: Math.round((trackedBlockSpend * eligibility.mpd) + (baseBlockSpend * baseMpd)),
+          trackedSpend,
+          trackedFourMpdSpend: trackedSpend,
+        });
+      });
+
+      return outcomes;
+    }
+
+    orderedTransactions.forEach(({ transaction }) => {
+      const outcome = this.calculateRewardOutcome(transaction, cardId, effectiveElections);
+      outcomes.set(transaction, {
+        ...outcome,
+        trackedSpend: 0,
+        trackedFourMpdSpend: 0,
+      });
+    });
+
+    return outcomes;
+  }
 
   static calculateRewardOutcome(
     transaction: Transaction,
@@ -122,7 +240,9 @@ export class TransactionCalculator {
     let eligibleSpend = 0;
     let expectedMiles = 0;
 
-    transactions.forEach(t => {
+    const orderedTransactions = this.sortTransactionsForCapProcessing(transactions);
+
+    orderedTransactions.forEach(({ transaction: t }) => {
       const amount = Math.abs(t.amount);
       const blockSpend = Math.floor(amount / 5) * 5;
       const eligibility = CardBenefitManager.isTransactionEligible(t, 'UOB_LADYS', effectiveElections);
@@ -204,16 +324,12 @@ export class TransactionCalculator {
 
     // Use DBS points rounding rules for DBS WWMC
     if (cardId === 'DBS_WWMC') {
+      const rewardOutcomes = this.calculateRewardOutcomes(scopedTransactions, cardId, effectiveElections);
       scopedTransactions.forEach(t => {
-        totalSpent += Math.abs(t.amount);
-        const eligibility = CardBenefitManager.isTransactionEligible(t, cardId, userElections);
-        const totalMpd = eligibility.eligible ? eligibility.mpd : baseMpd;
-        const basePoints = Math.floor(Math.abs(t.amount) / 5);
-        const totalMultiplier = totalMpd / baseMpd;
-        const bonusMultiplier = Math.max(0, totalMultiplier - 1);
-        const bonusPoints = Math.floor((Math.abs(t.amount) / 5) * bonusMultiplier);
-        const totalPoints = basePoints + bonusPoints;
-        expectedMiles += totalPoints * 2;
+        const outcome = rewardOutcomes.get(t);
+        if (!outcome) return;
+        totalSpent += outcome.trackedFourMpdSpend;
+        expectedMiles += outcome.miles;
       });
     } else if (cardId === 'UOB_LADYS') {
       const uob = this.calculateUobEligibleSpend(scopedTransactions, effectiveElections);

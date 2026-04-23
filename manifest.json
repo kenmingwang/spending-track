@@ -18,6 +18,13 @@
   },
   "content_scripts": [
     {
+      "matches": ["*://*.uob.com.sg/*", "*://*.uobgroup.com/*"],
+      "js": ["src/content-scripts/uobNetworkHook.ts"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    },
+    {
       "matches": ["*://internet-banking.dbs.com.sg/*", "*://*/*"],
       "js": ["src/content-scripts/extractor.ts"]
     }

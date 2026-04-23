@@ -13,6 +13,7 @@ import {
   type CategoryOverrides
 } from '../utils/category-overrides';
 import { enrichHsbcTransactionInference } from '../utils/merchant-category';
+import { dedupeTransactions } from '../utils/transaction-dedupe';
 import { getCardDisplayName, t } from '../utils/i18n';
 import { useLanguage } from '../utils/useLanguage';
 
@@ -44,7 +45,7 @@ export const Dashboard: React.FC = () => {
       cardLastUpdated?: Record<string, string>;
     };
     const overrides = data.categoryOverrides || {};
-    const rawTransactions = data.transactions || [];
+    const rawTransactions = dedupeTransactions(data.transactions || []);
     const enrichedTransactions = rawTransactions.map(enrichHsbcTransactionInference);
     const txns = applyCategoryOverrides(enrichedTransactions, overrides);
     const hasBackfilledTransactions = enrichedTransactions.some((txn, index) => (
@@ -59,7 +60,7 @@ export const Dashboard: React.FC = () => {
     setUserElections(mergedCardConfigs);
     setCategoryOverrides(overrides);
     setCardLastUpdated(data.cardLastUpdated || {});
-    if (hasBackfilledTransactions) {
+    if (hasBackfilledTransactions || rawTransactions.length !== (data.transactions || []).length) {
       await chrome.storage.local.set({ transactions: txns });
     }
 
@@ -313,6 +314,11 @@ export const Dashboard: React.FC = () => {
           >
             <ArrowLeft size={24} />
           </button>
+          {cardConfig.coverImage && (
+            <div className="shrink-0 w-[104px] h-[66px] rounded-xl overflow-hidden border border-gray-200 bg-white">
+              <img src={cardConfig.coverImage} alt={cardConfig.name} className="w-full h-full object-cover" />
+            </div>
+          )}
           <h1 className="text-3xl font-bold text-gray-800">{getCardDisplayName(currentCard, language, cardConfig.name)}</h1>
         </div>
 
@@ -366,16 +372,13 @@ export const Dashboard: React.FC = () => {
                 return acc;
               }, 0);
               const bonusUsed = uobDetail.categorySpent[cat] || 0;
-              const rem = uobDetail.perCategoryCap - actualUsed;
-              const exceeded = actualUsed > uobDetail.perCategoryCap;
+              const rem = uobDetail.perCategoryCap - bonusUsed;
               const localizedCat = cat === 'Dining' ? t(language, 'dining') : cat === 'Travel' ? t(language, 'travel') : cat;
               return (
-                <div key={cat} className={exceeded ? 'flex justify-between bg-red-50 rounded px-3 py-2 border border-red-100' : 'flex justify-between bg-gray-50 rounded px-3 py-2'}>
+                <div key={cat} className="flex justify-between bg-gray-50 rounded px-3 py-2">
                   <span className="text-gray-600">{localizedCat}</span>
-                  <span className={exceeded ? 'font-semibold text-red-600' : 'font-semibold text-gray-900'}>
-                    ${actualUsed.toFixed(2)} / ${uobDetail.perCategoryCap} ({t(language, 'balance_short')} {rem < 0 ? '-' : ''}${Math.abs(rem).toFixed(2)})
-                    {exceeded ? `, +$${(actualUsed - uobDetail.perCategoryCap).toFixed(2)} over` : ''}
-                    {actualUsed !== bonusUsed ? `, 4 mpd tracked $${bonusUsed.toFixed(2)}` : ''}
+                  <span className="font-semibold text-gray-900">
+                    ${bonusUsed.toFixed(2)} / ${uobDetail.perCategoryCap} ({t(language, 'balance_short')} {rem < 0 ? '-' : ''}${Math.abs(rem).toFixed(2)})
                   </span>
                 </div>
               );

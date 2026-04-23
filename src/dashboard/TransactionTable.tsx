@@ -112,7 +112,13 @@ export const TransactionTable: React.FC<Props> = ({ transactions, cardId, userEl
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [transactions, cardConfig]);
 
-  const getPoints = (txn: Transaction) => TransactionCalculator.calculateRewardOutcome(txn, cardId, userElections || null);
+  const rewardOutcomes = useMemo(
+    () => TransactionCalculator.calculateRewardOutcomes(transactions, cardId, userElections || null),
+    [transactions, cardId, userElections]
+  );
+
+  const getPoints = (txn: Transaction) =>
+    rewardOutcomes.get(txn) ?? TransactionCalculator.calculateRewardOutcome(txn, cardId, userElections || null);
 
   const columns = useMemo(() => [
     columnHelper.accessor('date', {
@@ -207,9 +213,26 @@ export const TransactionTable: React.FC<Props> = ({ transactions, cardId, userEl
       cell: props => {
         const txn = props.row.original;
         const eligibility = CardBenefitManager.isTransactionEligible(txn, cardId, userElections);
+        const outcome = rewardOutcomes.get(txn);
+        const trackedFourMpdSpend = outcome?.trackedFourMpdSpend || 0;
+        const amount = Math.abs(txn.amount);
+
+        if (eligibility.eligible && eligibility.mpd >= 4 && trackedFourMpdSpend > 0 && trackedFourMpdSpend < amount) {
+          return (
+            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800">
+              {t(language, 'partial_4mpd')}
+            </span>
+          );
+        }
+
         return eligibility.eligible ? (
-          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-            {eligibility.mpd} mpd
+          <span className={cn(
+            "inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium",
+            eligibility.mpd >= 4 && trackedFourMpdSpend <= 0
+              ? "bg-gray-100 text-gray-600"
+              : "bg-green-100 text-green-800"
+          )}>
+            {eligibility.mpd >= 4 && trackedFourMpdSpend <= 0 ? `${baseMpd} mpd` : `${eligibility.mpd} mpd`}
           </span>
         ) : (
           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
@@ -242,7 +265,7 @@ export const TransactionTable: React.FC<Props> = ({ transactions, cardId, userEl
         );
       }
     }),
-  ], [cardId, userElections, onCategoryChange, onReimbursableChange, onHsbcContactlessOptOutChange, baseMpd, categorySuggestions, pointsHeader, language, locale]);
+  ], [cardId, userElections, onCategoryChange, onReimbursableChange, onHsbcContactlessOptOutChange, baseMpd, categorySuggestions, pointsHeader, language, locale, rewardOutcomes]);
 
   const table = useReactTable({
     data: transactions,

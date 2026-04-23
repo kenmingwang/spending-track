@@ -15,6 +15,7 @@ export interface CardConfig {
   name: string;
   totalCap: number;
   icon: string;
+  coverImage?: string;
   requiresElection: boolean;
   maxElectable?: number;
   electableCategories?: Record<string, CategoryConfig>;

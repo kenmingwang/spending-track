@@ -11,6 +11,7 @@ import { enrichHsbcTransactionInference } from '../utils/merchant-category';
 type PopupCardStat = {
   id: string;
   icon: string;
+  coverImage?: string;
   totalCap: number;
   displayName: string;
   spent: number;
@@ -68,6 +69,7 @@ export const Popup: React.FC = () => {
       return {
         id: card.id,
         icon: card.icon,
+        coverImage: card.coverImage,
         totalCap: CardBenefitManager.getCardTotalCap(card.id),
         displayName: getCardDisplayName(card.id, language, card.name),
         spent: calculated.totalSpent,
@@ -129,7 +131,13 @@ export const Popup: React.FC = () => {
         {cardStats.map((card) => (
           <div key={card.id} className="bg-gray-50 rounded-xl p-3 border border-gray-100">
             <div className="flex items-center gap-3 mb-2">
-              <span className="text-xl">{card.icon}</span>
+              <div className="shrink-0 w-[60px] h-[38px] rounded-md overflow-hidden border border-gray-200 bg-white">
+                {card.coverImage ? (
+                  <img src={card.coverImage} alt={card.displayName} className="w-full h-full object-cover" />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center text-xl">{card.icon}</div>
+                )}
+              </div>
               <div className="flex-grow">
                 <div className="text-sm font-bold truncate">{card.displayName}</div>
                 <div className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">

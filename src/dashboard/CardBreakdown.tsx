@@ -35,25 +35,23 @@ export const CardBreakdown: React.FC<Props> = ({ card, transactions, userElectio
   const netMonthlySpent = monthlyTransactions.reduce((acc, t) => acc + (t.reimbursable ? 0 : Math.abs(t.amount)), 0);
   const displayedSpent = spendingTransactions.reduce((acc, t) => acc + Math.abs(t.amount), 0);
   const effectiveElections = CardBenefitManager.getEffectiveUserElections(card.id, userElections);
+  const rewardOutcomes = React.useMemo(
+    () => TransactionCalculator.calculateRewardOutcomes(monthlyTransactions, card.id, effectiveElections),
+    [monthlyTransactions, card.id, effectiveElections]
+  );
   const uobEligible = card.id === 'UOB_LADYS'
     ? TransactionCalculator.calculateUobEligibleSpend(monthlyTransactions, effectiveElections)
     : null;
   const hsbcEligible = card.id === 'HSBC_REVOLUTION'
     ? TransactionCalculator.calculateHsbcEligibleSpend(monthlyTransactions)
     : null;
-  const fourMpdSpent = card.id === 'UOB_LADYS'
-    ? (uobEligible?.aggregateUsed || 0)
-    : card.id === 'HSBC_REVOLUTION'
-      ? (hsbcEligible?.aggregateUsed || 0)
-      : monthlyTransactions.reduce((acc, t) => {
-          const eligibility = CardBenefitManager.isTransactionEligible(t, card.id, effectiveElections);
-          if (eligibility.eligible && eligibility.mpd >= 4) {
-            return acc + Math.abs(t.amount);
-          }
-          return acc;
-        }, 0);
+  const fourMpdSpent = monthlyTransactions.reduce(
+    (acc, transaction) => acc + (rewardOutcomes.get(transaction)?.trackedFourMpdSpend || 0),
+    0
+  );
   const fourMpdUsed = Math.min(cardCap, fourMpdSpent);
   const fourMpdBalance = Math.max(0, cardCap - fourMpdUsed);
+  const dbsTrackedSpend = card.id === 'DBS_WWMC' ? fourMpdUsed : totalSpent;
   
   const categorySpending: Record<string, number> = {};
   spendingTransactions.forEach(t => {
@@ -78,13 +76,12 @@ export const CardBreakdown: React.FC<Props> = ({ card, transactions, userElectio
         }, 0);
         const bonusUsed = uobEligible.categorySpent?.[cat] || 0;
         const cap = uobEligible.perCategoryCap || 750;
-        const remaining = cap - actualUsed;
-        const pct = cap > 0 ? Math.min(100, (actualUsed / cap) * 100) : 0;
+        const remaining = cap - bonusUsed;
+        const pct = cap > 0 ? Math.min(100, (bonusUsed / cap) * 100) : 0;
         return {
           name: cat,
           actualUsed,
           bonusUsed,
-          overCap: Math.max(0, actualUsed - cap),
           remaining,
           cap,
           pct,
@@ -115,7 +112,17 @@ export const CardBreakdown: React.FC<Props> = ({ card, transactions, userElectio
     <>
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 hover:shadow-md transition-shadow flex flex-col h-full">
       <div className="flex items-center gap-4 mb-4">
-        <div className="text-3xl bg-gray-50 p-3 rounded-lg">{card.icon}</div>
+        <div className="shrink-0 w-[88px] h-[56px] rounded-lg overflow-hidden border border-gray-200 bg-gray-50">
+          {card.coverImage ? (
+            <img
+              src={card.coverImage}
+              alt={card.name}
+              className="w-full h-full object-cover"
+            />
+          ) : (
+            <div className="w-full h-full flex items-center justify-center text-3xl bg-gray-50">{card.icon}</div>
+          )}
+        </div>
         <div className="flex-1 min-w-0">
           <h3 className="font-bold text-gray-900 leading-tight">{getCardDisplayName(card.id, language, card.name)}</h3>
           <p className="text-xs text-gray-500 font-medium">{getCardDisplayDescription(card.id, language, card.description)}</p>
@@ -145,7 +152,7 @@ export const CardBreakdown: React.FC<Props> = ({ card, transactions, userElectio
             <span className="text-gray-900 font-bold">${displayedSpent.toFixed(2)}</span>
           </div>
           {excludeReimbursable ? (
-            <div className="text-[11px] text-gray-400 mb-2">{t(language, 'gross_used_for_points', { value: totalSpent.toFixed(2) })}</div>
+            <div className="text-[11px] text-gray-400 mb-2">{t(language, 'gross_used_for_points', { value: dbsTrackedSpend.toFixed(2) })}</div>
           ) : (
             <div className="text-[11px] text-gray-400 mb-2">{t(language, 'net_excl_reimb', { value: netMonthlySpent.toFixed(2) })}</div>
           )}
@@ -166,7 +173,7 @@ export const CardBreakdown: React.FC<Props> = ({ card, transactions, userElectio
             <div className="mt-3 space-y-1.5">
               {uobCategoryRows.map(row => (
                 <div key={row.name} className="rounded bg-gray-50 px-2.5 py-2">
-                  <div className={cn("flex justify-between text-[11px]", row.exceeded ? "text-red-600" : "text-gray-600")}>
+                  <div className="flex justify-between text-[11px] text-gray-600">
                     <span>{row.name === 'Dining' ? t(language, 'dining') : t(language, 'travel')}</span>
                     <span className="font-semibold">
                       {row.remaining < 0 ? '-' : ''}${Math.abs(row.remaining).toFixed(2)} {t(language, 'balance_short')}
@@ -176,20 +183,14 @@ export const CardBreakdown: React.FC<Props> = ({ card, transactions, userElectio
                     <div
                       className={cn(
                         "h-full rounded-full transition-all duration-700",
-                        row.exceeded ? 'bg-red-500' : row.name === 'Dining' ? 'bg-emerald-500' : 'bg-violet-500'
+                        row.name === 'Dining' ? 'bg-emerald-500' : 'bg-violet-500'
                       )}
                       style={{ width: `${row.pct}%` }}
                     />
                   </div>
-                  <div className={cn("mt-1 text-[10px]", row.exceeded ? "text-red-600 font-semibold" : "text-gray-500")}>
-                    ${row.actualUsed.toFixed(2)} / ${row.cap}
-                    {row.overCap > 0 && ` (+$${row.overCap.toFixed(2)} over)`}
+                  <div className="mt-1 text-[10px] text-gray-500">
+                    ${row.bonusUsed.toFixed(2)} / ${row.cap}
                   </div>
-                  {row.actualUsed !== row.bonusUsed && (
-                    <div className="mt-0.5 text-[10px] text-gray-400">
-                      4 mpd tracked: ${row.bonusUsed.toFixed(2)}
-                    </div>
-                  )}
                 </div>
               ))}
             </div>

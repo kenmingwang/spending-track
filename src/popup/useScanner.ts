@@ -8,6 +8,7 @@ import {
   type CategoryOverrides
 } from '../utils/category-overrides';
 import { enrichHsbcTransactionInference } from '../utils/merchant-category';
+import { dedupeTransactions, getTransactionDedupeKey } from '../utils/transaction-dedupe';
 
 export interface ScanProgress {
   current: number;
@@ -139,25 +140,50 @@ export const useScanner = (language: Language = 'en') => {
         const sections: string[] = [];
         const mergedTransactions: any[] = [];
         const mergedRewards: RewardInfo[] = [];
+        const scanErrors: string[] = [];
+        const debugSummaries: string[] = [];
 
         const scanSection = async (value: string, label: string) => {
           setStatus(t(language, 'scan_uob_section', { label }));
           const switchResp = await sendMessageWithRetry({ action: "uob_set_section", value });
           if (switchResp?.error) throw new Error(switchResp.error);
           const scanResp = await sendMessageWithRetry({ action: "extract_transactions" });
-          if (scanResp?.error) throw new Error(scanResp.error);
+          if (scanResp?.debugSummary) {
+            debugSummaries.push(`${label}: ${scanResp.debugSummary}`);
+          }
+          if (scanResp?.debug) {
+            console.info(`Spending Track UOB debug (${label})`, scanResp.debug);
+          }
+          if (scanResp?.error) {
+            scanErrors.push(`${label}: ${scanResp.error}`);
+            return;
+          }
           if (scanResp?.section) sections.push(scanResp.section);
           mergedTransactions.push(...(scanResp?.transactions || []));
           mergedRewards.push(...(scanResp?.rewards || []));
         };
 
-        // If user is on "Previous Statement", respect that explicit selection and scan only that view.
-        if (currentSectionValue === '2' || /previous statement/i.test(currentSectionText)) {
-          await scanSection('2', 'Previous Statement');
-        } else {
-          // Default monthly import mode: Latest Statement + New Transactions Since Last Statement.
-          await scanSection('1', 'Latest Statement');
-          await scanSection('0', 'New Transactions');
+        // Respect the user's current UOB section selection and do not auto-switch across sections.
+        const activeSectionValue = currentSectionValue || '1';
+        const activeSectionLabel = currentSectionText || (
+          activeSectionValue === '2'
+            ? 'Previous Statement'
+            : activeSectionValue === '0'
+              ? 'New Transactions'
+              : 'Latest Statement'
+        );
+        await scanSection(activeSectionValue, activeSectionLabel);
+
+        try {
+          const finalDebugResp = await sendMessageWithRetry({ action: "uob_debug_snapshot" });
+          if (finalDebugResp?.summary) {
+            debugSummaries.push(`Final: ${finalDebugResp.summary}`);
+          }
+          if (finalDebugResp?.debug) {
+            console.info('Spending Track UOB debug (final)', finalDebugResp.debug);
+          }
+        } catch (debugErr) {
+          console.warn('Spending Track: unable to collect final UOB debug snapshot', debugErr);
         }
 
         response = {
@@ -165,6 +191,8 @@ export const useScanner = (language: Language = 'en') => {
           sections,
           transactions: mergedTransactions,
           rewards: mergedRewards,
+          errors: scanErrors,
+          debugSummaries,
           cancelled: false
         };
       } else {
@@ -184,12 +212,13 @@ export const useScanner = (language: Language = 'en') => {
           return 'DBS_WWMC';
         };
 
-        const batchSeen = new Set<string>();
-        const dedupedBatchTxns = (response.transactions || []).filter((tx: any) => {
-          const k = `${normalizedCardId(tx)}|${tx.date}|${tx.merchant}|${Math.abs(tx.amount)}`;
-          if (batchSeen.has(k)) return false;
-          batchSeen.add(k);
-          return true;
+        const dedupedBatchTxns = dedupeTransactions(response.transactions || []);
+        console.info('Spending Track: batch scan result', {
+          source: response?.source || 'UNKNOWN',
+          scannedCount: dedupedBatchTxns.length,
+          rawCount: (response.transactions || []).length,
+          sections: response?.sections || response?.section || [],
+          sample: dedupedBatchTxns.slice(0, 5)
         });
 
         // Handle deduplication and saving
@@ -198,19 +227,20 @@ export const useScanner = (language: Language = 'en') => {
           categoryOverrides?: CategoryOverrides;
           cardLastUpdated?: Record<string, string>;
         };
-        const existingTxns = data.transactions || [];
+        const existingTxns = dedupeTransactions(data.transactions || []);
         const overrides = data.categoryOverrides || {};
         const cardLastUpdated = data.cardLastUpdated || {};
         
-        // Simple deduplication logic
+        const existingKeys = new Set(existingTxns.map(getTransactionDedupeKey));
         const newTxns = dedupedBatchTxns.filter((nt: any) => 
-          !existingTxns.some((et: any) => 
-            normalizedCardId(et) === normalizedCardId(nt) &&
-            et.date === nt.date && 
-            et.merchant === nt.merchant && 
-            Math.abs(et.amount) === Math.abs(nt.amount)
-          )
+          !existingKeys.has(getTransactionDedupeKey(nt))
         );
+        console.info('Spending Track: dedupe result', {
+          existingCount: existingTxns.length,
+          scannedCount: dedupedBatchTxns.length,
+          newCount: newTxns.length,
+          duplicateCount: dedupedBatchTxns.length - newTxns.length
+        });
 
         // 1) Learn cache from existing transaction history (user-edited or previously inferred categories)
         let learnedOverrides: CategoryOverrides = { ...overrides };
@@ -262,13 +292,18 @@ export const useScanner = (language: Language = 'en') => {
         });
 
         await chrome.storage.local.set({ 
-          transactions: [...existingTxns, ...newTxnsWithOverrides],
+          transactions: dedupeTransactions([...existingTxns, ...newTxnsWithOverrides]),
           categoryOverrides: learnedOverrides,
           cardLastUpdated
         });
 
         if (response?.source === 'UOB') {
           const rewards = (response.rewards || []) as RewardInfo[];
+          const debugText = Array.isArray(response.debugSummaries) && response.debugSummaries.length > 0
+            ? response.debugSummaries.slice(-2).join(' | ')
+            : Array.isArray(response.errors) && response.errors.length > 0
+              ? response.errors.slice(-2).join(' | ')
+              : '';
           if (rewards.length > 0) {
             await chrome.storage.local.set({
               uobRewards: rewards,
@@ -288,10 +323,23 @@ export const useScanner = (language: Language = 'en') => {
                     count: newTxnsWithOverrides.length
                   })
             );
+          } else if (dedupedBatchTxns.length > 0) {
+            const sections = Array.isArray(response.sections)
+              ? Array.from(new Set(response.sections.filter(Boolean)))
+              : [];
+            setStatus(
+              response.cancelled
+                ? t(language, 'scan_stopped')
+                : t(language, 'scan_uob_duplicates', {
+                    sections: sections.join(' + ') || '-',
+                    count: dedupedBatchTxns.length,
+                    newCount: 0
+                  })
+            );
           } else if (rewards.length > 0) {
             setStatus(response.cancelled ? t(language, 'scan_stopped') : t(language, 'scan_uob_rewards', { count: rewards.length }));
           } else {
-            setStatus(response.cancelled ? t(language, 'scan_stopped') : t(language, 'scan_uob_none'));
+            setStatus(response.cancelled ? t(language, 'scan_stopped') : `${t(language, 'scan_uob_none')}${debugText ? ` | Debug: ${debugText}` : ''}`);
           }
         } else {
           setStatus(response.cancelled ? t(language, 'scan_stopped') : t(language, 'scan_found_new', { count: newTxnsWithOverrides.length }));
