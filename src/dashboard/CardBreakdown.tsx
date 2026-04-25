@@ -6,7 +6,7 @@ import { getCardBenefitDetail } from '../utils/card-benefit-details';
 import { TransactionCalculator } from '../utils/calculator';
 import { cn } from '../utils/cn';
 import { normalizeCategory } from '../utils/category-overrides';
-import { getCardDisplayDescription, getCardDisplayName, Language, t } from '../utils/i18n';
+import { getCardDisplayDescription, getCardDisplayName, getCategoryDisplayName, Language, t } from '../utils/i18n';
 
 interface Props {
   card: CardConfig;
@@ -45,13 +45,18 @@ export const CardBreakdown: React.FC<Props> = ({ card, transactions, userElectio
   const hsbcEligible = card.id === 'HSBC_REVOLUTION'
     ? TransactionCalculator.calculateHsbcEligibleSpend(monthlyTransactions)
     : null;
-  const fourMpdSpent = monthlyTransactions.reduce(
+  const liveFreshCashback = card.id === 'DBS_LIVE_FRESH'
+    ? TransactionCalculator.calculateLiveFreshCashback(monthlyTransactions)
+    : null;
+  const fourMpdSpent = liveFreshCashback
+    ? liveFreshCashback.aggregateUsed
+    : monthlyTransactions.reduce(
     (acc, transaction) => acc + (rewardOutcomes.get(transaction)?.trackedFourMpdSpend || 0),
     0
   );
   const fourMpdUsed = Math.min(cardCap, fourMpdSpent);
   const fourMpdBalance = Math.max(0, cardCap - fourMpdUsed);
-  const dbsTrackedSpend = card.id === 'DBS_WWMC' ? fourMpdUsed : totalSpent;
+  const dbsTrackedSpend = card.id === 'DBS_WWMC' ? fourMpdUsed : liveFreshCashback ? liveFreshCashback.eligibleSpend : totalSpent;
   
   const categorySpending: Record<string, number> = {};
   spendingTransactions.forEach(t => {
@@ -99,37 +104,39 @@ export const CardBreakdown: React.FC<Props> = ({ card, transactions, userElectio
           used,
           cap: hsbcEligible.aggregateCap,
           pct: hsbcEligible.aggregateCap > 0 ? Math.min(100, (used / hsbcEligible.aggregateCap) * 100) : 0,
-          colorClass: ['bg-red-500', 'bg-sky-500', 'bg-emerald-500', 'bg-amber-500'][index] || 'bg-slate-500'
+          colorClass: ['bg-red', 'bg-info', 'bg-green', 'bg-yellow'][index] || 'bg-secondary'
         }))
     : [];
   const detailLabels = React.useMemo(() => ({
-    button: language === 'zh' ? 'Benefit details' : 'Benefit details',
-    sources: language === 'zh' ? 'Official sources' : 'Official sources',
-    close: language === 'zh' ? 'Close' : 'Close',
+    button: t(language, 'benefit_details'),
+    sources: t(language, 'official_sources'),
+    close: t(language, 'close'),
   }), [language]);
 
   return (
     <>
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 hover:shadow-md transition-shadow flex flex-col h-full">
-      <div className="flex items-center gap-4 mb-4">
-        <div className="shrink-0 w-[88px] h-[56px] rounded-lg overflow-hidden border border-gray-200 bg-gray-50">
+      <div className="card card-benefit h-100">
+      <div className="card-body d-flex flex-column">
+      <div className="d-flex align-items-start justify-content-between gap-3 mb-3">
+        <div
+          className="card-benefit-image overflow-hidden border bg-light"
+        >
           {card.coverImage ? (
             <img
               src={card.coverImage}
               alt={card.name}
-              className="w-full h-full object-cover"
+              className={cn(
+                "w-100 h-100",
+                card.coverFit === 'contain' ? 'object-contain' : 'object-cover'
+              )}
+              style={{
+                transform: `scale(${card.coverScale || 1})`,
+                objectPosition: card.coverPosition || 'center',
+                background: card.coverBackground || '#f8fafc'
+              }}
             />
           ) : (
-            <div className="w-full h-full flex items-center justify-center text-3xl bg-gray-50">{card.icon}</div>
-          )}
-        </div>
-        <div className="flex-1 min-w-0">
-          <h3 className="font-bold text-gray-900 leading-tight">{getCardDisplayName(card.id, language, card.name)}</h3>
-          <p className="text-xs text-gray-500 font-medium">{getCardDisplayDescription(card.id, language, card.description)}</p>
-          {lastUpdatedAt && (
-            <p className="text-[11px] text-gray-400 mt-1">
-              {t(language, 'last_updated')}: {new Date(lastUpdatedAt).toLocaleDateString(language === 'zh' ? 'zh-CN' : 'en-SG')}
-            </p>
+            <div className="d-flex h-100 w-100 align-items-center justify-content-center bg-light fs-1">{card.icon}</div>
           )}
         </div>
         {benefitDetail && (
@@ -138,33 +145,49 @@ export const CardBreakdown: React.FC<Props> = ({ card, transactions, userElectio
             onClick={() => setShowBenefitDetail(true)}
             aria-label={detailLabels.button}
             title={detailLabels.button}
-            className="shrink-0 w-8 h-8 rounded-full border border-amber-200 bg-amber-50 text-amber-700 font-bold text-sm hover:bg-amber-100 transition-colors"
+            className="btn btn-icon btn-outline-secondary flex-shrink-0"
           >
             !
           </button>
         )}
       </div>
 
-      <div className="space-y-4 flex-grow">
+      <div className="mb-4">
+        <h3 className="h3 mb-2 lh-sm">{getCardDisplayName(card.id, language, card.name)}</h3>
+        <p className="text-secondary mb-0 lh-base">{getCardDisplayDescription(card.id, language, card.description)}</p>
+        {lastUpdatedAt && (
+          <p className="mt-2 mb-0 text-secondary small">
+            {t(language, 'last_updated')}: {new Date(lastUpdatedAt).toLocaleDateString(language === 'zh' ? 'zh-CN' : 'en-SG')}
+          </p>
+        )}
+      </div>
+
+      <div className="space-y-4 flex-grow-1">
         <div>
-          <div className="flex justify-between text-sm mb-2 font-medium">
-            <span className="text-gray-500">{t(language, 'total_spending')}</span>
-            <span className="text-gray-900 font-bold">${displayedSpent.toFixed(2)}</span>
+          <div className="mb-2 flex justify-between text-sm">
+            <span className="font-medium text-secondary">{t(language, 'total_spending')}</span>
+            <span className="h2 mb-0">${displayedSpent.toFixed(2)}</span>
           </div>
           {excludeReimbursable ? (
-            <div className="text-[11px] text-gray-400 mb-2">{t(language, 'gross_used_for_points', { value: dbsTrackedSpend.toFixed(2) })}</div>
+            <div className="mb-3 small text-secondary">
+              {card.rewardType === 'cashback'
+                ? language === 'zh'
+                  ? `合资格消费 $${dbsTrackedSpend.toFixed(2)} 用于 cashback 估算`
+                  : `Eligible $${dbsTrackedSpend.toFixed(2)} used for cashback estimate`
+                : t(language, 'gross_used_for_points', { value: dbsTrackedSpend.toFixed(2) })}
+            </div>
           ) : (
-            <div className="text-[11px] text-gray-400 mb-2">{t(language, 'net_excl_reimb', { value: netMonthlySpent.toFixed(2) })}</div>
+            <div className="mb-3 small text-secondary">{t(language, 'net_excl_reimb', { value: netMonthlySpent.toFixed(2) })}</div>
           )}
-          <div className="flex justify-between text-sm mb-2 font-medium">
-            <span className="text-gray-500">{t(language, 'mpd_cap_remaining')}</span>
-            <span className="text-gray-900 font-bold">${fourMpdBalance.toFixed(2)} / ${cardCap}</span>
+          <div className="mb-2 flex justify-between text-sm">
+            <span className="font-medium text-secondary">{card.rewardType === 'cashback' ? t(language, 'cashback_label') : t(language, 'mpd_cap_remaining')}</span>
+            <span className="font-semibold">${fourMpdBalance.toFixed(2)} / ${cardCap}</span>
           </div>
-          <div className="w-full bg-gray-100 rounded-full h-2">
+          <div className="progress progress-sm">
             <div 
               className={cn(
-                "h-full rounded-full transition-all duration-1000",
-                percentSpent > 90 ? "bg-red-500" : percentSpent > 70 ? "bg-orange-500" : "bg-blue-600"
+                "progress-bar transition-all duration-1000",
+                percentSpent > 90 ? "bg-red" : percentSpent > 70 ? "bg-orange" : "bg-primary"
               )}
               style={{ width: `${percentSpent}%` }}
             />
@@ -172,23 +195,23 @@ export const CardBreakdown: React.FC<Props> = ({ card, transactions, userElectio
           {uobCategoryRows.length > 0 && (
             <div className="mt-3 space-y-1.5">
               {uobCategoryRows.map(row => (
-                <div key={row.name} className="rounded bg-gray-50 px-2.5 py-2">
-                  <div className="flex justify-between text-[11px] text-gray-600">
+                <div key={row.name} className="rounded border bg-light px-3 py-2">
+                  <div className="d-flex justify-content-between small text-secondary">
                     <span>{row.name === 'Dining' ? t(language, 'dining') : t(language, 'travel')}</span>
                     <span className="font-semibold">
                       {row.remaining < 0 ? '-' : ''}${Math.abs(row.remaining).toFixed(2)} {t(language, 'balance_short')}
                     </span>
                   </div>
-                  <div className="w-full bg-gray-200 rounded-full h-1.5 mt-1">
+                  <div className="progress progress-sm mt-2">
                     <div
                       className={cn(
-                        "h-full rounded-full transition-all duration-700",
-                        row.name === 'Dining' ? 'bg-emerald-500' : 'bg-violet-500'
+                        "progress-bar transition-all duration-700",
+                        row.name === 'Dining' ? 'bg-green' : 'bg-purple'
                       )}
                       style={{ width: `${row.pct}%` }}
                     />
                   </div>
-                  <div className="mt-1 text-[10px] text-gray-500">
+                  <div className="mt-1 small text-secondary">
                     ${row.bonusUsed.toFixed(2)} / ${row.cap}
                   </div>
                 </div>
@@ -198,31 +221,33 @@ export const CardBreakdown: React.FC<Props> = ({ card, transactions, userElectio
           {hsbcCategoryRows.length > 0 && (
             <div className="mt-3 space-y-1.5">
               {hsbcCategoryRows.map(row => (
-                <div key={row.name} className="rounded bg-gray-50 px-2.5 py-2">
-                  <div className="flex justify-between text-[11px] text-gray-600">
-                    <span>{row.name === 'Dining' ? t(language, 'dining') : row.name === 'Travel' ? t(language, 'travel') : row.name}</span>
-                    <span className="font-semibold">${row.used.toFixed(2)} matched</span>
+                <div key={row.name} className="rounded border bg-light px-3 py-2">
+                  <div className="d-flex justify-content-between small text-secondary">
+                    <span>{getCategoryDisplayName(row.name, language)}</span>
+                    <span className="font-semibold">${row.used.toFixed(2)} {t(language, 'hsbc_matched_amount')}</span>
                   </div>
-                  <div className="w-full bg-gray-200 rounded-full h-1.5 mt-1">
+                  <div className="progress progress-sm mt-2">
                     <div
-                      className={cn("h-full rounded-full transition-all duration-700", row.colorClass)}
+                      className={cn("progress-bar transition-all duration-700", row.colorClass)}
                       style={{ width: `${row.pct}%` }}
                     />
                   </div>
-                  <div className="mt-1 text-[10px] text-gray-500">Shared cap basis: ${row.used.toFixed(2)} / ${row.cap}</div>
+                  <div className="mt-1 small text-secondary">
+                    {t(language, 'hsbc_shared_cap_basis', { used: row.used.toFixed(2), cap: row.cap })}
+                  </div>
                 </div>
               ))}
             </div>
           )}
         </div>
 
-        <div className="pt-4 border-t border-gray-50">
-          <div className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">{t(language, 'top_categories')}</div>
+        <div className="border-top pt-3">
+          <div className="mb-3 text-uppercase small fw-semibold text-secondary">{t(language, 'top_categories')}</div>
           <div className="space-y-2">
             {topCategories.map(([cat, amount]) => (
               <div key={cat} className="flex justify-between items-center text-sm">
-                <span className="text-gray-600 font-medium">{cat}</span>
-                <span className="text-gray-900 font-bold">${amount.toFixed(2)}</span>
+                <span className="font-medium text-secondary">{getCategoryDisplayName(cat, language)}</span>
+                <span className="font-semibold">${amount.toFixed(2)}</span>
               </div>
             ))}
           </div>
@@ -231,10 +256,11 @@ export const CardBreakdown: React.FC<Props> = ({ card, transactions, userElectio
 
       <button 
         onClick={onViewDetails}
-        className="w-full mt-6 py-2.5 px-4 bg-gray-900 text-white rounded-xl font-semibold text-sm hover:bg-black transition-colors"
+        className="btn btn-dark w-100 mt-4"
       >
         {t(language, 'view_details')}
       </button>
+      </div>
       </div>
 
       {showBenefitDetail && benefitDetail && (

@@ -5,6 +5,8 @@ import { normalizeCategory } from './category-overrides';
 export interface RewardOutcome {
   points: number;
   miles: number;
+  cashback: number;
+  rewardType: 'points' | 'miles' | 'cashback';
   trackedSpend: number;
   trackedFourMpdSpend: number;
 }
@@ -67,8 +69,67 @@ export class TransactionCalculator {
         outcomes.set(transaction, {
           points: totalPoints,
           miles: totalPoints * 2,
+          cashback: 0,
+          rewardType: 'points',
           trackedSpend,
           trackedFourMpdSpend,
+        });
+      });
+
+      return outcomes;
+    }
+
+    if (cardId === 'DBS_LIVE_FRESH') {
+      const monthRetailSpend: Record<string, number> = {};
+      orderedTransactions.forEach(({ transaction }) => {
+        if (this.isNonRetailTransaction(transaction)) return;
+        const key = this.getMonthKey(transaction.date);
+        if (!key) return;
+        monthRetailSpend[key] = (monthRetailSpend[key] || 0) + Math.abs(transaction.amount);
+      });
+
+      const monthlyEligibleCashbackUsed: Record<string, number> = {};
+      orderedTransactions.forEach(({ transaction }) => {
+        const amount = Math.abs(transaction.amount);
+        const monthKey = this.getMonthKey(transaction.date);
+        const eligibility = CardBenefitManager.isTransactionEligible(transaction, cardId, effectiveElections);
+        const qualifiesForBonus = (monthRetailSpend[monthKey] || 0) >= 600;
+        const retail = !this.isNonRetailTransaction(transaction);
+
+        if (!retail) {
+          outcomes.set(transaction, {
+            points: 0,
+            miles: 0,
+            cashback: 0,
+            rewardType: 'cashback',
+            trackedSpend: 0,
+            trackedFourMpdSpend: 0,
+          });
+          return;
+        }
+
+        let cashback = amount * 0.003;
+        let trackedSpend = 0;
+
+        if (eligibility.eligible && qualifiesForBonus) {
+          const used = monthlyEligibleCashbackUsed[monthKey] || 0;
+          const remainingCap = Math.max(0, 60 - used);
+          const fullRateCashback = amount * 0.05;
+          const fullRateCashbackApplied = Math.min(fullRateCashback, remainingCap);
+          const fullRateSpend = fullRateCashbackApplied / 0.05;
+          const baseOnlySpend = Math.max(0, amount - fullRateSpend);
+          cashback = fullRateCashbackApplied + (baseOnlySpend * 0.003);
+          trackedSpend = fullRateSpend;
+          monthlyEligibleCashbackUsed[monthKey] = used + fullRateCashbackApplied;
+        }
+
+        outcomes.set(transaction, {
+          points: 0,
+          miles: 0,
+          cashback: Math.floor(cashback * 100) / 100,
+          rewardType: 'cashback',
+          trackedSpend,
+          trackedFourMpdSpend: trackedSpend,
         });
       });
 
@@ -90,6 +151,8 @@ export class TransactionCalculator {
           outcomes.set(transaction, {
             points: blockSpend,
             miles: Math.round(blockSpend * baseMpd),
+            cashback: 0,
+            rewardType: 'points',
             trackedSpend: 0,
             trackedFourMpdSpend: 0,
           });
@@ -111,6 +174,8 @@ export class TransactionCalculator {
         outcomes.set(transaction, {
           points: blockSpend,
           miles: Math.round((trackedBlockSpend * eligibility.mpd) + (baseBlockSpend * baseMpd)),
+          cashback: 0,
+          rewardType: 'points',
           trackedSpend,
           trackedFourMpdSpend: trackedSpend,
         });
@@ -123,6 +188,7 @@ export class TransactionCalculator {
       const outcome = this.calculateRewardOutcome(transaction, cardId, effectiveElections);
       outcomes.set(transaction, {
         ...outcome,
+        rewardType: outcome.rewardType || 'points',
         trackedSpend: 0,
         trackedFourMpdSpend: 0,
       });
@@ -145,30 +211,79 @@ export class TransactionCalculator {
     if (cardId === 'DBS_WWMC') {
       const basePoints = Math.floor(amount / 5);
       if (totalMpd <= baseMpd) {
-        return { points: basePoints, miles: basePoints * 2 };
+        return { points: basePoints, miles: basePoints * 2, cashback: 0, rewardType: 'points' as const };
       }
       const totalMultiplier = totalMpd / baseMpd;
       const bonusMultiplier = Math.max(0, totalMultiplier - 1);
       const bonusPoints = Math.floor((amount / 5) * bonusMultiplier);
       const totalPoints = basePoints + bonusPoints;
-      return { points: totalPoints, miles: totalPoints * 2 };
+      return { points: totalPoints, miles: totalPoints * 2, cashback: 0, rewardType: 'points' as const };
+    }
+
+    if (cardId === 'DBS_LIVE_FRESH') {
+      const retail = !this.isNonRetailTransaction(transaction);
+      const eligible = retail && eligibility.eligible;
+      const cashback = retail ? amount * (eligible ? 0.05 : 0.003) : 0;
+      return {
+        points: 0,
+        miles: 0,
+        cashback: Math.floor(cashback * 100) / 100,
+        rewardType: 'cashback' as const,
+      };
     }
 
     if (cardId === 'UOB_LADYS') {
       const blockSpend = Math.floor(amount / 5) * 5;
-      return { points: blockSpend, miles: Math.round(blockSpend * totalMpd) };
+      return { points: blockSpend, miles: Math.round(blockSpend * totalMpd), cashback: 0, rewardType: 'points' as const };
     }
 
     if (cardId === 'HSBC_REVOLUTION') {
       const roundedSpend = Math.floor(amount);
       const rewardRate = Math.round(totalMpd / 0.4);
       const points = roundedSpend * rewardRate;
-      return { points, miles: Math.round(roundedSpend * totalMpd) };
+      return { points, miles: Math.round(roundedSpend * totalMpd), cashback: 0, rewardType: 'points' as const };
     }
 
     return {
       points: Math.round(amount * totalMpd),
       miles: Math.round(amount * totalMpd),
+      cashback: 0,
+      rewardType: 'points' as const,
+    };
+  }
+
+  static isNonRetailTransaction(transaction: Transaction) {
+    const merchant = (transaction.merchant || '').toUpperCase();
+    const type = (transaction.transactionType || '').toUpperCase();
+    return transaction.amount <= 0
+      || type.includes('PAYMENT')
+      || type.includes('REWARD')
+      || /(BILL PAYMENT|PAYMT|DEDUCTED UNI\$|CARD FEE WAIVER|BASE REWARDS|ADD UNI\$)/.test(merchant);
+  }
+
+  static calculateLiveFreshCashback(transactions: Transaction[]) {
+    const outcomes = this.calculateRewardOutcomes(transactions, 'DBS_LIVE_FRESH');
+    let eligibleSpend = 0;
+    let cashback = 0;
+    let retailSpend = 0;
+
+    transactions.forEach((transaction) => {
+      if (!this.isNonRetailTransaction(transaction)) {
+        retailSpend += Math.abs(transaction.amount);
+      }
+      const outcome = outcomes.get(transaction);
+      if (!outcome) return;
+      eligibleSpend += outcome.trackedSpend;
+      cashback += outcome.cashback;
+    });
+
+    return {
+      retailSpend,
+      eligibleSpend,
+      aggregateCap: 60,
+      aggregateUsed: Math.min(60, cashback),
+      aggregateRemaining: Math.max(0, 60 - Math.min(60, cashback)),
+      cashback: Math.floor(cashback * 100) / 100,
     };
   }
 
@@ -290,13 +405,13 @@ export class TransactionCalculator {
     return `${y}-${m}`;
   }
 
-  static formatMonthKey(monthKey: string) {
+  static formatMonthKey(monthKey: string, locale: string = 'en-US') {
     const m = monthKey.match(/^(\d{4})-(\d{2})$/);
     if (!m) return monthKey;
     const year = Number(m[1]);
     const monthIndex = Number(m[2]) - 1;
     if (monthIndex < 0 || monthIndex > 11) return monthKey;
-    return `${new Date(year, monthIndex, 1).toLocaleString('en-US', { month: 'long' })} ${year}`;
+    return `${new Date(year, monthIndex, 1).toLocaleString(locale, { month: 'long' })} ${year}`;
   }
 
   static groupTransactionsByMonth(transactions: Transaction[]) {
@@ -331,6 +446,10 @@ export class TransactionCalculator {
         totalSpent += outcome.trackedFourMpdSpend;
         expectedMiles += outcome.miles;
       });
+    } else if (cardId === 'DBS_LIVE_FRESH') {
+      const liveFresh = this.calculateLiveFreshCashback(scopedTransactions);
+      totalSpent = liveFresh.eligibleSpend;
+      expectedMiles = Math.round(liveFresh.cashback * 100);
     } else if (cardId === 'UOB_LADYS') {
       const uob = this.calculateUobEligibleSpend(scopedTransactions, effectiveElections);
       totalSpent = uob.eligibleSpend;

@@ -1,21 +1,27 @@
-import React, { useState, useEffect } from 'react';
-import { Play, Square, ExternalLink, RefreshCw, CreditCard } from 'lucide-react';
-import { useScanner } from './useScanner';
+import React, { useEffect, useState } from 'react';
+import { CreditCard, ExternalLink, Play, RefreshCw, Square } from 'lucide-react';
+import { Transaction } from '../types';
 import { CardBenefitManager } from '../utils/card-benefits';
 import { TransactionCalculator } from '../utils/calculator';
-import { Transaction } from '../types';
-import { getCardDisplayName } from '../utils/i18n';
-import { useLanguage } from '../utils/useLanguage';
+import { getCardDisplayName, getCategoryDisplayName } from '../utils/i18n';
 import { enrichHsbcTransactionInference } from '../utils/merchant-category';
+import { useLanguage } from '../utils/useLanguage';
+import { OWNED_CARDS_STORAGE_KEY } from '../utils/storage-keys';
+import { useScanner } from './useScanner';
 
 type PopupCardStat = {
   id: string;
   icon: string;
   coverImage?: string;
+  coverFit?: 'cover' | 'contain';
+  coverScale?: number;
+  coverPosition?: string;
+  coverBackground?: string;
   totalCap: number;
   displayName: string;
   spent: number;
   miles: number;
+  cashback: number;
   uobDetail: ReturnType<typeof TransactionCalculator.calculateUobEligibleSpend> | null;
   hsbcDetail: ReturnType<typeof TransactionCalculator.calculateHsbcEligibleSpend> | null;
   lastUpdatedAt: string | null;
@@ -26,17 +32,25 @@ export const Popup: React.FC = () => {
   const { isScanning, progress, status, startScan, stopScan } = useScanner(language);
   const [cardStats, setCardStats] = useState<PopupCardStat[]>([]);
   const [uobRewards, setUobRewards] = useState<Array<{ label: string; value: number }>>([]);
+  const [hasOwnedCards, setHasOwnedCards] = useState(true);
 
   useEffect(() => {
     void loadStats();
   }, [isScanning, language]);
 
   const loadStats = async () => {
-    const data = await chrome.storage.local.get(['transactions', 'uobRewards', 'cardConfigs', 'cardLastUpdated']) as {
+    const data = await chrome.storage.local.get([
+      'transactions',
+      'uobRewards',
+      'cardConfigs',
+      'cardLastUpdated',
+      OWNED_CARDS_STORAGE_KEY
+    ]) as {
       transactions?: Transaction[];
       uobRewards?: Array<{ label: string; value: number }>;
       cardConfigs?: Record<string, string[]>;
       cardLastUpdated?: Record<string, string>;
+      ownedCards?: string[];
     };
 
     const rawTransactions = data.transactions || [];
@@ -50,7 +64,17 @@ export const Popup: React.FC = () => {
 
     setUobRewards(data.uobRewards || []);
 
-    const stats = CardBenefitManager.getAllCards().map((card) => {
+    const ownedCards = Array.isArray(data.ownedCards)
+      ? data.ownedCards.filter((cardId) => CardBenefitManager.getAllCards().some((card) => card.id === cardId))
+      : [];
+    const visibleCards = ownedCards.length > 0
+      ? CardBenefitManager.getAllCards().filter((card) => ownedCards.includes(card.id))
+      : rawTransactions.length > 0
+        ? CardBenefitManager.getAllCards()
+        : [];
+    setHasOwnedCards(visibleCards.length > 0);
+
+    const stats = visibleCards.map((card) => {
       const monthlyTransactions = CardBenefitManager
         .filterTransactionsForCard(transactions, card.id)
         .filter((txn) => {
@@ -59,6 +83,9 @@ export const Popup: React.FC = () => {
         });
 
       const calculated = TransactionCalculator.calculateStats(monthlyTransactions, card.id);
+      const liveFresh = card.id === 'DBS_LIVE_FRESH'
+        ? TransactionCalculator.calculateLiveFreshCashback(monthlyTransactions)
+        : null;
       const uobDetail = card.id === 'UOB_LADYS'
         ? TransactionCalculator.calculateUobEligibleSpend(monthlyTransactions, data.cardConfigs?.[card.id] || null)
         : null;
@@ -70,10 +97,15 @@ export const Popup: React.FC = () => {
         id: card.id,
         icon: card.icon,
         coverImage: card.coverImage,
+        coverFit: card.coverFit,
+        coverScale: card.coverScale,
+        coverPosition: card.coverPosition,
+        coverBackground: card.coverBackground,
         totalCap: CardBenefitManager.getCardTotalCap(card.id),
         displayName: getCardDisplayName(card.id, language, card.name),
         spent: calculated.totalSpent,
         miles: calculated.expectedMiles,
+        cashback: liveFresh?.cashback || 0,
         uobDetail,
         hsbcDetail,
         lastUpdatedAt: lastUpdated[card.id] || null,
@@ -113,7 +145,7 @@ export const Popup: React.FC = () => {
           <button
             onClick={() => setLanguage(language === 'en' ? 'zh' : 'en')}
             className="px-2 py-1 text-[10px] border border-gray-200 rounded-md hover:bg-gray-100"
-            title="Switch Language"
+            title={t('switch_language')}
           >
             {language === 'en' ? t('lang_zh') : t('lang_en')}
           </button>
@@ -128,12 +160,39 @@ export const Popup: React.FC = () => {
       </header>
 
       <div className="space-y-3 mb-6">
+        {!hasOwnedCards && (
+          <div className="bg-slate-50 rounded-xl p-4 border border-slate-200">
+            <div className="text-sm font-bold text-slate-900 mb-1">
+              {t('setup_cards_first_title')}
+            </div>
+            <div className="text-xs text-slate-500 mb-3">
+              {t('setup_cards_first_body')}
+            </div>
+            <button
+              onClick={openDashboard}
+              className="inline-flex items-center gap-2 rounded-lg bg-slate-950 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800"
+            >
+              <ExternalLink size={14} />
+              {t('open_dashboard')}
+            </button>
+          </div>
+        )}
+
         {cardStats.map((card) => (
           <div key={card.id} className="bg-gray-50 rounded-xl p-3 border border-gray-100">
             <div className="flex items-center gap-3 mb-2">
               <div className="shrink-0 w-[60px] h-[38px] rounded-md overflow-hidden border border-gray-200 bg-white">
                 {card.coverImage ? (
-                  <img src={card.coverImage} alt={card.displayName} className="w-full h-full object-cover" />
+                  <img
+                    src={card.coverImage}
+                    alt={card.displayName}
+                    className={`w-full h-full ${card.coverFit === 'contain' ? 'object-contain' : 'object-cover'}`}
+                    style={{
+                      transform: `scale(${card.coverScale || 1})`,
+                      objectPosition: card.coverPosition || 'center',
+                      background: card.coverBackground || '#f8fafc'
+                    }}
+                  />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center text-xl">{card.icon}</div>
                 )}
@@ -150,7 +209,9 @@ export const Popup: React.FC = () => {
                 )}
               </div>
               <div className="text-right">
-                <div className="text-xs font-bold text-blue-600">{card.miles} {t('miles_label')}</div>
+                <div className="text-xs font-bold text-blue-600">
+                  {card.id === 'DBS_LIVE_FRESH' ? `$${card.cashback.toFixed(2)} ${t('cashback_label')}` : `${card.miles} ${t('miles_label')}`}
+                </div>
               </div>
             </div>
 
@@ -188,6 +249,7 @@ export const Popup: React.FC = () => {
                 })}
               </div>
             )}
+
             {card.id === 'HSBC_REVOLUTION' && card.hsbcDetail && (
               <div className="mt-2 space-y-1">
                 {Object.entries(card.hsbcDetail.categorySpent)
@@ -195,14 +257,13 @@ export const Popup: React.FC = () => {
                   .sort((a, b) => b[1] - a[1])
                   .slice(0, 3)
                   .map(([category, used]) => {
-                    const localizedCategory = category === 'Dining' ? t('dining') : category === 'Travel' ? t('travel') : category;
                     const pct = Math.min(100, card.hsbcDetail!.aggregateCap > 0 ? (used / card.hsbcDetail!.aggregateCap) * 100 : 0);
 
                     return (
                       <div key={category} className="text-[10px] text-gray-500">
                         <div className="flex justify-between">
-                          <span>{localizedCategory}</span>
-                          <span>${used.toFixed(0)} matched</span>
+                          <span>{getCategoryDisplayName(category, language)}</span>
+                          <span>${used.toFixed(0)} {t('hsbc_matched_amount')}</span>
                         </div>
                         <div className="w-full bg-gray-200 rounded-full h-1 mt-0.5">
                           <div

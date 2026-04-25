@@ -12,9 +12,10 @@ import { Transaction } from '../types';
 import { CardBenefitManager } from '../utils/card-benefits';
 import { TransactionCalculator } from '../utils/calculator';
 import { normalizeCategory } from '../utils/category-overrides';
-import { Language, t } from '../utils/i18n';
+import { getCardDisplayName, getCategoryDisplayName, getMerchantDisplayName, Language, t } from '../utils/i18n';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { FileText, Search } from 'lucide-react';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -44,6 +45,7 @@ const COMMON_CATEGORY_OPTIONS = [
   'Memberships',
   'Bills',
   'Online Spending',
+  'Online / PayWave',
   'Uncategorized',
 ];
 
@@ -52,11 +54,22 @@ const getDateSortValue = (dateStr: string) => {
   return Number.isNaN(t) ? 0 : t;
 };
 
+const formatDateCell = (dateStr: string, locale: string) => {
+  const date = new Date(dateStr);
+  if (Number.isNaN(date.getTime())) return dateStr;
+  return date.toLocaleDateString(locale, {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric'
+  }).replace(/,/g, '');
+};
+
 const CategoryCell: React.FC<{
   value: string;
   onCommit?: (val: string) => void;
   options: string[];
-}> = ({ value, onCommit, options }) => {
+  language: Language;
+}> = ({ value, onCommit, options, language }) => {
   const [draft, setDraft] = React.useState(value || 'Uncategorized');
 
   React.useEffect(() => {
@@ -74,13 +87,13 @@ const CategoryCell: React.FC<{
         }
       }}
       className={cn(
-        "w-full max-w-[220px] px-2 py-1 rounded text-xs border border-gray-200 bg-gray-50 text-gray-700",
-        onCommit ? "focus:ring-2 focus:ring-blue-500 focus:bg-white" : "opacity-70 cursor-not-allowed"
+        "form-select form-select-sm table-category-select",
+        onCommit ? "" : "opacity-70 cursor-not-allowed"
       )}
       disabled={!onCommit}
     >
       {options.map(opt => (
-        <option key={opt} value={opt}>{opt}</option>
+        <option key={opt} value={opt}>{getCategoryDisplayName(opt, language)}</option>
       ))}
     </select>
   );
@@ -95,7 +108,9 @@ export const TransactionTable: React.FC<Props> = ({ transactions, cardId, userEl
   const baseMpd = cardConfig?.fallbackMPD ?? 0.4;
   const pointsHeader = cardId === 'UOB_LADYS'
     ? `UOB ${t(language, 'points')}`
-    : cardId === 'DBS_WWMC'
+    : cardId === 'DBS_LIVE_FRESH'
+      ? t(language, 'cashback_label')
+      : cardId === 'DBS_WWMC'
       ? `DBS ${t(language, 'points')}`
       : cardId === 'HSBC_REVOLUTION'
         ? `HSBC ${t(language, 'points')}`
@@ -126,13 +141,38 @@ export const TransactionTable: React.FC<Props> = ({ transactions, cardId, userEl
       sortingFn: (rowA, rowB, columnId) =>
         getDateSortValue(rowA.getValue(columnId) as string) - getDateSortValue(rowB.getValue(columnId) as string),
       sortDescFirst: true,
-      cell: info => new Date(info.getValue()).toLocaleDateString(locale, {
-        day: '2-digit', month: 'short', year: 'numeric' 
-      }),
+      cell: info => <span className="table-date-nowrap">{formatDateCell(info.getValue(), locale)}</span>,
     }),
     columnHelper.accessor('merchant', {
       header: t(language, 'merchant'),
-      cell: info => <span className="font-medium text-gray-900">{info.getValue()}</span>,
+      cell: info => <span className="table-merchant-name fw-semibold text-reset" title={getMerchantDisplayName(info.getValue(), language)}>{getMerchantDisplayName(info.getValue(), language)}</span>,
+    }),
+    columnHelper.display({
+      id: 'source',
+      header: language === 'zh' ? '来源' : 'Source',
+      cell: info => {
+        const txn = info.row.original;
+        const normalizedCardId = CardBenefitManager.normalizeTransactionCardId(txn);
+        const cardName = getCardDisplayName(normalizedCardId, language, normalizedCardId);
+
+        if (!txn.statementId) {
+          return (
+            <div className="table-source-cell small text-muted" title={cardName}>
+              <span className="table-source-icon table-source-icon-local">L</span>
+              <span className="table-source-card">{cardName}</span>
+            </div>
+          );
+        }
+
+        return (
+          <div className="table-source-cell small" title={cardName}>
+            <span className="badge bg-blue-lt table-source-badge" aria-label={language === 'zh' ? '账单导入' : 'Statement import'}>
+              <FileText size={12} />
+            </span>
+            <span className="table-source-card text-muted">{cardName}</span>
+          </div>
+        );
+      },
     }),
     columnHelper.accessor('category', {
       header: t(language, 'category'),
@@ -140,13 +180,14 @@ export const TransactionTable: React.FC<Props> = ({ transactions, cardId, userEl
         <CategoryCell
           value={normalizeCategory(info.getValue() || 'Uncategorized')}
           options={categorySuggestions}
+          language={language}
           onCommit={onCategoryChange ? (val) => onCategoryChange(info.row.original, val) : undefined}
         />
       ),
     }),
     columnHelper.accessor('amount', {
       header: t(language, 'amount'),
-      cell: info => <span className="font-semibold text-gray-900">${Math.abs(info.getValue()).toFixed(2)}</span>,
+      cell: info => <span className="fw-semibold text-reset">${Math.abs(info.getValue()).toFixed(2)}</span>,
     }),
     columnHelper.display({
       id: 'reimbursable',
@@ -154,14 +195,14 @@ export const TransactionTable: React.FC<Props> = ({ transactions, cardId, userEl
       cell: info => {
         const txn = info.row.original;
         return (
-          <label className="inline-flex items-center gap-1.5 text-xs text-gray-600">
+          <label className="form-check m-0">
             <input
               type="checkbox"
               checked={Boolean(txn.reimbursable)}
               onChange={(e) => onReimbursableChange?.(txn, e.target.checked)}
-              className="h-3.5 w-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              className="form-check-input"
             />
-            {t(language, 'yes')}
+            <span className="form-check-label text-muted">{t(language, 'yes')}</span>
           </label>
         );
       }
@@ -178,33 +219,33 @@ export const TransactionTable: React.FC<Props> = ({ transactions, cardId, userEl
           const isContactless = val.includes('CONTACTLESS');
 
           if (isOnline) {
-            return <span className="text-blue-600 text-xs font-medium">{t(language, 'online_inapp')}</span>;
+            return <span className="badge bg-blue-lt">{t(language, 'online_inapp')}</span>;
           }
 
           return (
             <div className="flex items-center gap-2">
               <span className={cn(
-                "text-xs font-medium",
-                isPhysical ? "text-gray-500" : "text-orange-600"
+                "badge",
+                isPhysical ? "bg-secondary-lt" : "bg-orange-lt"
               )}>
-                {isPhysical ? 'Physical / no tap' : t(language, 'offline_contactless')}
+                {isPhysical ? t(language, 'payment_physical_no_tap') : t(language, 'offline_contactless')}
               </span>
               {onHsbcContactlessOptOutChange && (
                 <button
                   type="button"
                   onClick={() => onHsbcContactlessOptOutChange(txn, !Boolean(txn.hsbcContactlessOptOut))}
-                  className="px-2 py-0.5 rounded border border-gray-200 text-[10px] text-gray-600 hover:bg-gray-50"
+                  className="btn btn-outline-secondary btn-sm table-action-btn"
                 >
-                  {txn.hsbcContactlessOptOut ? 'Assume tap' : 'No'}
+                  {txn.hsbcContactlessOptOut ? t(language, 'payment_assume_tap') : t(language, 'payment_no_tap')}
                 </button>
               )}
             </div>
           );
         }
 
-        if (val.includes('ONLINE') || val.includes('IN-APP')) return <span className="text-blue-600 text-xs font-medium">{t(language, 'online_inapp')}</span>;
-        if (val.includes('PHYSICAL') || val.includes('CONTACTLESS')) return <span className="text-orange-600 text-xs font-medium">{t(language, 'offline_contactless')}</span>;
-        return <span className="text-gray-400 text-xs italic">{t(language, 'na')}</span>;
+        if (val.includes('ONLINE') || val.includes('IN-APP')) return <span className="badge bg-blue-lt">{t(language, 'online_inapp')}</span>;
+        if (val.includes('PHYSICAL') || val.includes('CONTACTLESS')) return <span className="badge bg-orange-lt">{t(language, 'offline_contactless')}</span>;
+        return <span className="text-muted small">{t(language, 'na')}</span>;
       },
     }),
     columnHelper.display({
@@ -217,9 +258,17 @@ export const TransactionTable: React.FC<Props> = ({ transactions, cardId, userEl
         const trackedFourMpdSpend = outcome?.trackedFourMpdSpend || 0;
         const amount = Math.abs(txn.amount);
 
+        if (cardId === 'DBS_LIVE_FRESH') {
+          return (
+            <span className={cn("badge", eligibility.eligible ? "bg-green-lt" : "bg-secondary-lt")}>
+              {eligibility.eligible ? '5%' : '0.3%'}
+            </span>
+          );
+        }
+
         if (eligibility.eligible && eligibility.mpd >= 4 && trackedFourMpdSpend > 0 && trackedFourMpdSpend < amount) {
           return (
-            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800">
+            <span className="badge bg-yellow-lt">
               {t(language, 'partial_4mpd')}
             </span>
           );
@@ -227,15 +276,15 @@ export const TransactionTable: React.FC<Props> = ({ transactions, cardId, userEl
 
         return eligibility.eligible ? (
           <span className={cn(
-            "inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium",
+            "badge",
             eligibility.mpd >= 4 && trackedFourMpdSpend <= 0
-              ? "bg-gray-100 text-gray-600"
-              : "bg-green-100 text-green-800"
+              ? "bg-secondary-lt"
+              : "bg-green-lt"
           )}>
             {eligibility.mpd >= 4 && trackedFourMpdSpend <= 0 ? `${baseMpd} mpd` : `${eligibility.mpd} mpd`}
           </span>
         ) : (
-          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
+          <span className="badge bg-secondary-lt">
             {baseMpd} mpd
           </span>
         );
@@ -246,6 +295,13 @@ export const TransactionTable: React.FC<Props> = ({ transactions, cardId, userEl
       header: pointsHeader,
       cell: props => {
         const points = getPoints(props.row.original);
+        if (cardId === 'DBS_LIVE_FRESH') {
+          return (
+            <span className={cn("text-xs font-semibold", points.cashback > 0 ? "text-green" : "text-muted")}>
+              ${points.cashback.toFixed(2)}
+            </span>
+          );
+        }
         return (
           <span className={cn("text-xs font-semibold", points.points > 0 ? "text-blue-700" : "text-gray-400")}>
             {points.points.toLocaleString()}
@@ -259,7 +315,7 @@ export const TransactionTable: React.FC<Props> = ({ transactions, cardId, userEl
       cell: props => {
         const points = getPoints(props.row.original);
         return (
-          <span className={cn("text-xs font-semibold", points.miles > 0 ? "text-blue-700" : "text-gray-400")}>
+          <span className={cn("text-xs font-semibold", points.miles > 0 ? "text-blue" : "text-muted")}>
             {points.miles.toLocaleString()}
           </span>
         );
@@ -281,67 +337,79 @@ export const TransactionTable: React.FC<Props> = ({ transactions, cardId, userEl
     getFilteredRowModel: getFilteredRowModel(),
   });
 
+  const grossTotal = transactions.reduce((acc, t) => acc + Math.abs(t.amount), 0);
+  const netTotal = transactions.reduce((acc, t) => acc + (t.reimbursable ? 0 : Math.abs(t.amount)), 0);
+  const pointsTotal = transactions.reduce((acc, t) => acc + getPoints(t).points, 0);
+  const milesTotal = transactions.reduce((acc, t) => acc + getPoints(t).miles, 0);
+  const cashbackTotal = transactions.reduce((acc, t) => acc + getPoints(t).cashback, 0);
+
   return (
-    <div className="w-full">
-      <div className="p-4 bg-white">
-        <input
-          value={globalFilter ?? ''}
-          onChange={e => setGlobalFilter(e.target.value)}
-          className="w-full max-w-sm px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition-all text-sm"
-          placeholder={t(language, 'search_transactions')}
-        />
+    <div className="card table-card">
+      <div className="card-header">
+        <div className="card-title">{t(language, 'transactions')}</div>
+        <div className="card-actions">
+          <div className="input-icon">
+            <span className="input-icon-addon">
+              <Search size={18} />
+            </span>
+            <input
+              value={globalFilter ?? ''}
+              onChange={e => setGlobalFilter(e.target.value)}
+              className="form-control"
+              placeholder={t(language, 'search_transactions')}
+            />
+          </div>
+        </div>
       </div>
-      <div className="overflow-x-auto">
-        <table className="w-full text-left border-collapse">
+
+      <div className="table-responsive">
+        <table className="table table-vcenter table-hover card-table">
           <thead>
             {table.getHeaderGroups().map(headerGroup => (
-              <tr key={headerGroup.id} className="bg-gray-50 border-b border-gray-100">
-                {headerGroup.headers.map(header => (
-                  <th 
-                    key={header.id} 
-                    className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
-                    onClick={header.column.getToggleSortingHandler()}
-                  >
-                    <div className="flex items-center gap-2">
-                    {flexRender(header.column.columnDef.header, header.getContext())}
-                    {{
-                      asc: ' ^',
-                      desc: ' v',
-                    }[header.column.getIsSorted() as string] ?? null}
-                    </div>
-                  </th>
-                ))}
+              <tr key={headerGroup.id}>
+                {headerGroup.headers.map(header => {
+                  const sorted = header.column.getIsSorted();
+                  return (
+                    <th
+                      key={header.id}
+                      className={header.column.getCanSort() ? 'cursor-pointer' : ''}
+                      onClick={header.column.getToggleSortingHandler()}
+                    >
+                      <span className="d-inline-flex align-items-center gap-1">
+                        {flexRender(header.column.columnDef.header, header.getContext())}
+                        {sorted && (
+                          <span className="text-blue">{sorted === 'asc' ? '↑' : '↓'}</span>
+                        )}
+                      </span>
+                    </th>
+                  );
+                })}
               </tr>
             ))}
           </thead>
           <tbody>
             {table.getRowModel().rows.map(row => (
-              <tr key={row.id} className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
+              <tr key={row.id}>
                 {row.getVisibleCells().map(cell => (
-                  <td key={cell.id} className="px-6 py-4 text-sm text-gray-700">
+                  <td key={cell.id}>
                     {flexRender(cell.column.columnDef.cell, cell.getContext())}
                   </td>
                 ))}
               </tr>
             ))}
           </tbody>
-          <tfoot className="bg-gray-50/30 font-semibold border-t-2 border-gray-100">
+          <tfoot>
             <tr>
-              <td className="px-6 py-4" colSpan={3}>{t(language, 'summary_totals')}</td>
-              <td className="px-6 py-4 text-gray-900">
-                ${transactions.reduce((acc, t) => acc + Math.abs(t.amount), 0).toFixed(2)}
+              <td colSpan={4}>
+                <span className="fw-semibold">{t(language, 'summary_totals')}</span>
+                <span className="ms-2 text-muted">{transactions.length.toLocaleString()} {t(language, 'txns')}</span>
               </td>
+              <td className="fw-bold text-reset">${grossTotal.toFixed(2)}</td>
               <td></td>
-              <td className="px-6 py-4 text-gray-900">
-                ${transactions.reduce((acc, t) => acc + (t.reimbursable ? 0 : Math.abs(t.amount)), 0).toFixed(2)} {t(language, 'net')}
-              </td>
-              <td className="px-6 py-4 text-blue-600"></td>
-              <td className="px-6 py-4 text-blue-700">
-                {transactions.reduce((acc, t) => acc + getPoints(t).points, 0).toLocaleString()} {t(language, 'points_label')}
-              </td>
-              <td className="px-6 py-4 text-blue-700">
-                {transactions.reduce((acc, t) => acc + getPoints(t).miles, 0).toLocaleString()} {t(language, 'miles_label')}
-              </td>
+              <td className="fw-bold text-reset">${netTotal.toFixed(2)} <span className="text-muted fw-normal">{t(language, 'net')}</span></td>
+              <td></td>
+              <td className="fw-bold text-blue">{cardId === 'DBS_LIVE_FRESH' ? `$${cashbackTotal.toFixed(2)}` : pointsTotal.toLocaleString()} <span className="text-muted fw-normal">{cardId === 'DBS_LIVE_FRESH' ? t(language, 'cashback_label') : t(language, 'points_label')}</span></td>
+              <td className="fw-bold text-blue">{milesTotal.toLocaleString()} <span className="text-muted fw-normal">{t(language, 'miles_label')}</span></td>
             </tr>
           </tfoot>
         </table>

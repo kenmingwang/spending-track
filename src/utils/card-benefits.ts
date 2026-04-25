@@ -4,14 +4,49 @@ import uobLadysSolitaireCard from '../../images/cards/uob-ladys-solitaire-card.p
 import hsbcRevolutionCard from '../../images/cards/hsbc-revolution-card.jpg';
 
 export const CARD_BENEFITS: Record<string, CardConfig> = {
+  'DBS_LIVE_FRESH': {
+    id: 'DBS_LIVE_FRESH',
+    name: 'DBS Live Fresh Card',
+    totalCap: 60,
+    icon: 'DBS',
+    requiresElection: false,
+    sharedCap: false,
+    rewardType: 'cashback',
+    categories: {
+      'Online / PayWave': {
+        cap: 60,
+        mpd: 5,
+        autoEligible: true,
+        paymentTypes: ['ONLINE', 'IN-APP', 'CONTACTLESS'],
+        excludedKeywords: [
+          'AXS',
+          'SAM',
+          'EZ-LINK',
+          'NETS FLASHPAY',
+          'TRANSIT LINK',
+          'CARDUP',
+          'IPAYMY',
+          'SP DIGITAL',
+          'HOSPITAL',
+          'INSURANCE'
+        ]
+      }
+    },
+    fallbackMPD: 0.3,
+    description: '0.3% cashback on all eligible spend, up to 5% on online and Visa payWave spend after S$600 monthly spend'
+  },
   'DBS_WWMC': {
     id: 'DBS_WWMC',
     name: 'DBS Woman\'s World Card',
     totalCap: 1000,
     icon: 'DBS',
     coverImage: dbsWomansWorldCard,
+    coverFit: 'contain',
+    coverScale: 1,
+    coverBackground: '#f8fafc',
     requiresElection: false,
     sharedCap: false,
+    rewardType: 'points',
     categories: {
       'Online Spending': {
         cap: 1000,
@@ -50,9 +85,13 @@ export const CARD_BENEFITS: Record<string, CardConfig> = {
     totalCap: 1500,
     icon: 'UOB',
     coverImage: uobLadysSolitaireCard,
+    coverFit: 'contain',
+    coverScale: 1,
+    coverBackground: '#eef2ff',
     requiresElection: true,
     maxElectable: 2,
     sharedCap: true,
+    rewardType: 'points',
     categories: {},
     electableCategories: {
       'Dining': {
@@ -84,8 +123,13 @@ export const CARD_BENEFITS: Record<string, CardConfig> = {
     totalCap: 1000,
     icon: 'HSBC',
     coverImage: hsbcRevolutionCard,
+    coverFit: 'contain',
+    coverScale: 2.25,
+    coverPosition: 'center',
+    coverBackground: '#fff',
     requiresElection: false,
     sharedCap: true,
+    rewardType: 'points',
     categories: {
       'Online Spending': {
         cap: 1000,
@@ -128,6 +172,8 @@ export class CardBenefitManager {
 
   static normalizeTransactionCardId(transaction: Transaction): string {
     if (transaction.cardId) return transaction.cardId;
+    if ((transaction.statementCardNumber || '').replace(/\D/g, '') === '4119110104748634') return 'DBS_LIVE_FRESH';
+    if ((transaction.statementCardNumber || '').replace(/\D/g, '') === '5420891101512310') return 'DBS_WWMC';
     if ((transaction.source || '').toUpperCase() === 'UOB') return 'UOB_LADYS';
     if ((transaction.source || '').toUpperCase() === 'HSBC') return 'HSBC_REVOLUTION';
     return 'DBS_WWMC';
